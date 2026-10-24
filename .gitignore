@@ -1,0 +1,11 @@
+# Godot 导入缓存
+.godot/
+
+# 导出产物
+build/
+exports/
+
+# 系统与编辑器文件
+.DS_Store
+*.tmp
+*.bak

@@ -3,9 +3,10 @@ extends Node2D
 ## 核心循环：采集燃油、返回着陆船、选择航程，然后进入下一张地图关卡。
 
 enum Phase {
-	EXPLORING,
+	PREPARATION,
+	COMBAT,
+	VICTORY,
 	LEVEL_SELECT,
-	LAUNCH_DEFENSE,
 	TRAVEL,
 	DEFEAT,
 }
@@ -25,12 +26,18 @@ const PULSE_RADIUS := 142.0
 const PULSE_COST := 24.0
 const PULSE_COOLDOWN := 4.0
 const FUEL_CELL_COUNT := 15
-const CREATURE_COUNT := 10
+const LOCAL_CRYSTAL_COUNT := 18
+const REMOTE_CRYSTAL_COUNT := 18
+const DEEP_CRYSTAL_COUNT := 10
+const CREATURE_COUNT := 16
 const TURRET_MOUNT_RADIUS := 92.0
-const TURRET_BUILD_FUEL_COST := 3
-const REPAIR_FUEL_COST := 3
-const REPAIR_AMOUNT := 36.0
+const TURRET_BUILD_COST := 14
+const REPAIR_COST := 4
+const REPAIR_AMOUNT := 24.0
 const SHIP_HULL_MAX := 240.0
+const TOTAL_WAVES := 5
+const INITIAL_PREP_TIME := 24.0
+const LATER_PREP_TIME := 38.0
 const NETWORK_PORT := 7777
 const NETWORK_SEND_INTERVAL := 0.09
 
@@ -84,22 +91,29 @@ const INPUT_KEYS := {
 	"sprint": [KEY_SHIFT],
 	"pulse": [KEY_SPACE],
 	"interact": [KEY_E],
+	"start_wave": [KEY_ENTER],
 	"network_host": [KEY_F2],
 	"network_join": [KEY_F3],
 	"network_leave": [KEY_F4],
 }
 
-var phase: Phase = Phase.EXPLORING
+var phase: Phase = Phase.PREPARATION
 var current_level_index := 0
 var visited_levels: Dictionary = {0: true}
 var fuel := 5
+var wave := 1
+var prep_timer := INITIAL_PREP_TIME
+var resources := 8
+var deep_cores := 0
+var score := 0
 var pending_level_index := -1
 var travel_timer := 0.0
 var elapsed_time := 0.0
 var ship_hull := SHIP_HULL_MAX
-var siege_timer := 0.0
-var siege_spawn_timer := 0.0
-var siege_queue: Array[int] = []
+var spawn_timer := 0.0
+var wave_assault_timer := 0.0
+var ambient_respawn_timer := 62.0
+var level_select_return_phase: Phase = Phase.VICTORY
 
 var player_position := SHIP_POSITION + Vector2(112.0, 0.0)
 var player_health := 100.0
@@ -118,6 +132,8 @@ var walk_phase := 0.0
 
 var fuel_cells: Array[Dictionary] = []
 var enemies: Array[Enemy] = []
+var crystals: Array[Dictionary] = []
+var wave_spawn_queue: Array[int] = []
 var turrets: Array = [null, null, null, null]
 var projectiles: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
@@ -149,6 +165,7 @@ func _ready() -> void:
 	_setup_world()
 	_connect_multiplayer_signals()
 	_load_level(0, true)
+	_start_preparation(1)
 	_parse_launch_arguments()
 	queue_redraw()
 
@@ -166,24 +183,17 @@ func _process(delta: float) -> void:
 		_refresh_hud()
 		return
 
-	if phase == Phase.LAUNCH_DEFENSE:
-		elapsed_time += delta
-		_update_player(delta)
-		_update_launch_defense(delta)
-		_update_turrets(delta)
-		_update_projectiles(delta)
-		_update_particles(delta)
-		_update_remote_players(delta)
-		_update_network_sync(delta)
+	if phase == Phase.VICTORY:
+		if Input.is_action_just_pressed("interact"):
+			_open_level_select()
 		_refresh_hud()
-		queue_redraw()
 		return
 
 	if phase == Phase.TRAVEL:
 		travel_timer = maxf(0.0, travel_timer - delta)
 		if travel_timer <= 0.0:
 			_load_level(pending_level_index, true)
-			phase = Phase.EXPLORING
+			_start_preparation(1)
 			if audio:
 				audio.play_music(&"main")
 			if hud:
@@ -194,10 +204,13 @@ func _process(delta: float) -> void:
 
 	elapsed_time += delta
 	_update_player(delta)
+	_update_wave_logic(delta)
 	_update_fuel_cells()
+	_update_collectibles()
 	_update_turrets(delta)
 	_update_projectiles(delta)
 	_update_particles(delta)
+	_update_ambient_life(delta)
 	_update_remote_players(delta)
 	_update_network_sync(delta)
 	_refresh_hud()
@@ -294,9 +307,10 @@ func _load_level(level_index: int, reset_player: bool) -> void:
 	turrets = [null, null, null, null]
 	projectiles.clear()
 	particles.clear()
-	siege_queue.clear()
-	siege_timer = 0.0
-	siege_spawn_timer = 0.0
+	wave_spawn_queue.clear()
+	spawn_timer = 0.0
+	wave_assault_timer = 0.0
+	ambient_respawn_timer = 62.0
 	ship_hull = SHIP_HULL_MAX
 
 	if reset_player:
@@ -312,9 +326,50 @@ func _load_level(level_index: int, reset_player: bool) -> void:
 
 	player_marker.position = player_position
 	player_marker.set_meta(&"alive", player_alive)
+	_spawn_crystals()
 	_spawn_fuel_cells()
 	_spawn_creatures()
 	queue_redraw()
+
+
+func _spawn_crystals() -> void:
+	crystals.clear()
+	for index in range(LOCAL_CRYSTAL_COUNT):
+		crystals.append(_create_crystal("common", 360.0, 1180.0))
+	for index in range(REMOTE_CRYSTAL_COUNT):
+		crystals.append(_create_crystal("common", 1450.0, 3150.0))
+	for index in range(DEEP_CRYSTAL_COUNT):
+		crystals.append(_create_crystal("deep", 2450.0, 3420.0))
+
+
+func _create_crystal(kind: String, min_distance: float, max_distance: float) -> Dictionary:
+	var crystal_position := SHIP_POSITION
+	var clearance := 30.0 if kind == "deep" else 20.0
+	for attempt in range(30):
+		crystal_position = SHIP_POSITION + Vector2.from_angle(
+			rng.randf_range(0.0, TAU)
+		) * rng.randf_range(min_distance, max_distance)
+		crystal_position.x = clampf(crystal_position.x, 80.0, WORLD_SIZE.x - 80.0)
+		crystal_position.y = clampf(crystal_position.y, 80.0, WORLD_SIZE.y - 80.0)
+		if (
+			crystal_position.distance_to(SHIP_POSITION) >= min_distance
+			and planet_surface.get_spawn_clearance(crystal_position, clearance)
+		):
+			break
+
+	var crystal := {
+		"position": crystal_position,
+		"kind": kind,
+		"value": rng.randi_range(4, 7),
+		"core_amount": 0,
+		"phase": rng.randf_range(0.0, TAU),
+	}
+	if kind == "deep":
+		crystal["value"] = rng.randi_range(12, 18)
+		crystal["core_amount"] = 1
+	elif min_distance >= 1400.0:
+		crystal["value"] = rng.randi_range(7, 11)
+	return crystal
 
 
 func _spawn_fuel_cells() -> void:
@@ -353,36 +408,45 @@ func _create_fuel_cell(min_distance: float, max_distance: float, amount: int) ->
 
 
 func _spawn_creatures() -> void:
+	for index in range(CREATURE_COUNT):
+		_spawn_ambient_creature(index)
+
+
+func _spawn_ambient_creature(index: int) -> void:
 	var anchors: Array[Dictionary] = []
 	for cell: Dictionary in fuel_cells:
 		if Vector2(cell["position"]).distance_to(SHIP_POSITION) > 1200.0:
 			anchors.append(cell)
+	for crystal: Dictionary in crystals:
+		if Vector2(crystal["position"]).distance_to(SHIP_POSITION) > 1400.0:
+			anchors.append(crystal)
 
-	for index in range(CREATURE_COUNT):
-		var kind: int = Enemy.EnemyKind.SCOUT
-		if index % 5 == 4:
-			kind = Enemy.EnemyKind.BRUISER
-		elif index % 4 == 3:
-			kind = Enemy.EnemyKind.SPITTER
+	var kind: int = Enemy.EnemyKind.SCOUT
+	if index % 5 == 4:
+		kind = Enemy.EnemyKind.BRUISER
+	elif index % 4 == 3:
+		kind = Enemy.EnemyKind.SPITTER
 
-		var spawn_position := SHIP_POSITION + Vector2(1900.0, 0.0)
-		if not anchors.is_empty():
-			var anchor: Dictionary = anchors[index % anchors.size()]
-			spawn_position = Vector2(anchor["position"]) + Vector2.from_angle(
-				rng.randf_range(0.0, TAU)
-			) * rng.randf_range(120.0, 280.0)
-		spawn_position.x = clampf(spawn_position.x, 80.0, WORLD_SIZE.x - 80.0)
-		spawn_position.y = clampf(spawn_position.y, 80.0, WORLD_SIZE.y - 80.0)
+	var spawn_position := SHIP_POSITION + Vector2(1900.0, 0.0)
+	if not anchors.is_empty():
+		var anchor: Dictionary = anchors[index % anchors.size()]
+		spawn_position = Vector2(anchor["position"]) + Vector2.from_angle(
+			rng.randf_range(0.0, TAU)
+		) * rng.randf_range(120.0, 280.0)
+	spawn_position.x = clampf(spawn_position.x, 80.0, WORLD_SIZE.x - 80.0)
+	spawn_position.y = clampf(spawn_position.y, 80.0, WORLD_SIZE.y - 80.0)
 
-		var enemy := Enemy.new()
-		enemy.position = spawn_position
-		enemy.z_index = 4
-		enemy.configure(kind, spawn_position, spawn_position, 1.0)
-		add_child(enemy)
-		enemies.append(enemy)
-		enemy.attack_player.connect(_on_enemy_attack_player)
-		enemy.projectile_requested.connect(_on_enemy_projectile_requested.bind(enemy))
-		enemy.set_player_target(player_marker, 410.0, 940.0)
+	var enemy := Enemy.new()
+	enemy.position = spawn_position
+	enemy.z_index = 4
+	enemy.configure(kind, spawn_position, spawn_position, 1.0)
+	add_child(enemy)
+	enemies.append(enemy)
+	enemy.set_meta(&"wave_enemy", false)
+	enemy.attack_player.connect(_on_enemy_attack_player)
+	enemy.projectile_requested.connect(_on_enemy_projectile_requested.bind(enemy))
+	enemy.defeated.connect(_on_enemy_defeated)
+	enemy.set_player_target(player_marker, 410.0, 940.0)
 
 
 func _update_player(delta: float) -> void:
@@ -448,49 +512,54 @@ func _try_interact() -> void:
 	if player_position.distance_to(SHIP_POSITION) > PLAYER_INTERACT_RADIUS:
 		return
 
-	if phase == Phase.LAUNCH_DEFENSE:
-		if ship_hull >= SHIP_HULL_MAX:
+	if phase == Phase.VICTORY:
+		if network_role != "offline":
 			if hud:
-				hud.show_notice("船体完好", COLOR_CYAN, 1.0)
-		elif fuel < REPAIR_FUEL_COST:
-			if hud:
-				hud.show_notice("修复需要 %d 燃油" % REPAIR_FUEL_COST, COLOR_RED, 1.4)
-		else:
-			fuel -= REPAIR_FUEL_COST
-			ship_hull = minf(SHIP_HULL_MAX, ship_hull + REPAIR_AMOUNT)
-			if hud:
-				hud.show_notice("船体 +%d" % int(REPAIR_AMOUNT), COLOR_CYAN, 1.2)
+				hud.show_notice("联机测试暂只验证同场移动", COLOR_AMBER, 1.8)
+			return
+		_open_level_select()
 		return
 
-	if network_role != "offline":
+	if ship_hull >= SHIP_HULL_MAX:
 		if hud:
-			hud.show_notice("联机测试暂只验证同场移动", COLOR_AMBER, 1.8)
-		return
-	_open_level_select()
+			hud.show_notice("船体完好", COLOR_CYAN, 1.0)
+	elif resources < REPAIR_COST:
+		if hud:
+			hud.show_notice("修复需要 %d 晶尘" % REPAIR_COST, COLOR_RED, 1.4)
+	else:
+		resources -= REPAIR_COST
+		ship_hull = minf(SHIP_HULL_MAX, ship_hull + REPAIR_AMOUNT)
+		if hud:
+			hud.show_notice("船体 +%d" % int(REPAIR_AMOUNT), COLOR_CYAN, 1.2)
 
 
 func _try_turret_interaction(slot_index: int) -> void:
 	var turret: Turret = turrets[slot_index]
 	if turret == null:
-		if fuel < TURRET_BUILD_FUEL_COST:
+		if resources < TURRET_BUILD_COST:
 			if hud:
-				hud.show_notice("建造炮台需要 %d 燃油" % TURRET_BUILD_FUEL_COST, COLOR_RED, 1.4)
+				hud.show_notice("建造炮台需要 %d 晶尘" % TURRET_BUILD_COST, COLOR_RED, 1.4)
 			return
-		fuel -= TURRET_BUILD_FUEL_COST
+		resources -= TURRET_BUILD_COST
 		_build_turret(slot_index)
 		if hud:
 			hud.show_notice("炮台 #%d 已上线" % (slot_index + 1), COLOR_AMBER, 1.2)
 		return
 
 	var upgrade_cost: int = turret.get_upgrade_cost()
+	var core_cost := 1 if turret.get_level() == 2 else 0
 	if turret.get_level() >= 3:
 		if hud:
 			hud.show_notice("炮台已达到三级", COLOR_CYAN, 1.0)
-	elif fuel < upgrade_cost:
+	elif resources < upgrade_cost:
 		if hud:
-			hud.show_notice("升级需要 %d 燃油" % upgrade_cost, COLOR_RED, 1.4)
+			hud.show_notice("升级需要 %d 晶尘" % upgrade_cost, COLOR_RED, 1.4)
+	elif deep_cores < core_cost:
+		if hud:
+			hud.show_notice("三级炮台需要 1 枚深核", COLOR_RED, 1.6)
 	elif turret.upgrade():
-		fuel -= upgrade_cost
+		resources -= upgrade_cost
+		deep_cores -= core_cost
 		if hud:
 			hud.show_notice("炮台升级至 %d 级" % turret.get_level(), COLOR_AMBER, 1.2)
 		if audio:
@@ -575,8 +644,38 @@ func _update_fuel_cells() -> void:
 		)
 
 
+func _update_collectibles() -> void:
+	for index in range(crystals.size()):
+		var crystal: Dictionary = crystals[index]
+		if player_position.distance_to(crystal["position"]) > 34.0:
+			continue
+		resources += int(crystal["value"])
+		var core_amount := int(crystal["core_amount"])
+		deep_cores += core_amount
+		score += 5 if core_amount == 0 else 55
+		var crystal_color := COLOR_VIOLET if core_amount > 0 else COLOR_CYAN
+		_add_explosion(crystal["position"], crystal_color, 8 if core_amount == 0 else 12, 80.0)
+		if core_amount > 0 and hud:
+			hud.show_notice("获得深核晶体", COLOR_VIOLET, 1.4)
+		if str(crystal["kind"]) == "deep":
+			crystals[index] = _create_crystal("deep", 2450.0, 3420.0)
+		elif Vector2(crystal["position"]).distance_to(SHIP_POSITION) > 1300.0:
+			crystals[index] = _create_crystal("common", 1450.0, 3150.0)
+		else:
+			crystals[index] = _create_crystal("common", 360.0, 1180.0)
+
+
+func _update_ambient_life(delta: float) -> void:
+	ambient_respawn_timer -= delta
+	if ambient_respawn_timer > 0.0:
+		return
+	ambient_respawn_timer = 58.0
+	if _ambient_enemy_count() < CREATURE_COUNT + 6:
+		_spawn_ambient_creature(rng.randi_range(0, 999))
+
+
 func _update_turrets(delta: float) -> void:
-	if phase != Phase.LAUNCH_DEFENSE:
+	if phase != Phase.COMBAT:
 		return
 	for turret in turrets:
 		if turret is Turret and is_instance_valid(turret):
@@ -611,9 +710,11 @@ func _on_enemy_attack_ship(damage: float) -> void:
 	_damage_ship(damage)
 
 
-func _on_enemy_defeated(enemy: Node, _reward: int) -> void:
+func _on_enemy_defeated(enemy: Node, reward: int) -> void:
 	if enemy in enemies:
 		enemies.erase(enemy)
+	resources += reward
+	score += reward * 8
 	_add_explosion(enemy.global_position, COLOR_AMBER, 9, 75.0)
 	if audio:
 		audio.play_explosion()
@@ -633,7 +734,7 @@ func _on_enemy_projectile_requested(
 ) -> void:
 	if (
 		not is_instance_valid(enemy)
-		or (phase != Phase.LAUNCH_DEFENSE and not enemy.is_hunting_player())
+		or (phase != Phase.COMBAT and not enemy.is_hunting_player())
 	):
 		return
 	projectiles.append({
@@ -651,7 +752,7 @@ func _on_enemy_projectile_requested(
 
 
 func _damage_ship(damage: float) -> void:
-	if phase != Phase.LAUNCH_DEFENSE:
+	if phase != Phase.COMBAT:
 		return
 	ship_hull = maxf(0.0, ship_hull - damage)
 	_add_explosion(
@@ -768,6 +869,7 @@ func _add_explosion(origin: Vector2, color: Color, count: int, force: float) -> 
 
 
 func _open_level_select() -> void:
+	level_select_return_phase = phase
 	phase = Phase.LEVEL_SELECT
 	get_tree().paused = true
 	if audio:
@@ -800,75 +902,132 @@ func _on_destination_selected(level_index: int) -> void:
 
 	fuel -= cost
 	pending_level_index = level_index
-	_begin_launch_defense(level_index, cost)
+	phase = Phase.TRAVEL
+	travel_timer = 1.1
 	get_tree().paused = false
 	level_select.close()
-
-
-func _begin_launch_defense(level_index: int, travel_cost: int) -> void:
-	phase = Phase.LAUNCH_DEFENSE
-	if audio:
-		audio.play_music(&"anomaly")
-	ship_hull = SHIP_HULL_MAX
-	siege_timer = 22.0 + float(LEVELS[level_index]["danger"]) * 3.0
-	siege_spawn_timer = 0.35
-	siege_queue.clear()
-
-	var danger := int(LEVELS[level_index]["danger"])
-	var enemy_count := 5 + danger * 2 + int(ceil(float(travel_cost) * 0.4))
-	for index in range(enemy_count):
-		var kind: int = Enemy.EnemyKind.SCOUT
-		if index % 6 == 5:
-			kind = Enemy.EnemyKind.SPITTER
-		elif index % 7 == 6:
-			kind = Enemy.EnemyKind.BRUISER
-		siege_queue.append(kind)
-
 	if hud:
-		hud.show_notice(
-			"发射准备开始 · 守住飞船 %.0f 秒" % siege_timer,
-			COLOR_AMBER,
-			2.2
-		)
+		hud.show_notice("起飞 · 航程消耗 %d 燃油" % cost, COLOR_AMBER, 1.6)
 	if audio:
 		audio.play_wave()
 
 
-func _update_launch_defense(delta: float) -> void:
-	siege_timer = maxf(0.0, siege_timer - delta)
-	if not siege_queue.is_empty():
-		siege_spawn_timer -= delta
-		if siege_spawn_timer <= 0.0:
-			_spawn_siege_enemy()
-			siege_spawn_timer = 1.05
+func _start_preparation(next_wave: int) -> void:
+	phase = Phase.PREPARATION
+	wave = next_wave
+	prep_timer = INITIAL_PREP_TIME if wave == 1 else LATER_PREP_TIME
+	wave_spawn_queue.clear()
+	spawn_timer = 0.0
+	wave_assault_timer = 0.0
+	if hud:
+		hud.show_notice(
+			"第 %d / %d 波将在倒计时后抵达" % [wave, TOTAL_WAVES],
+			COLOR_AMBER,
+			2.2
+		)
 
-	if siege_timer <= 0.0:
-		siege_queue.clear()
-		phase = Phase.TRAVEL
-		travel_timer = 1.1
-		if hud:
-			hud.show_notice("引擎稳定 · 正在起飞", COLOR_CYAN, 1.4)
+
+func _begin_combat() -> void:
+	phase = Phase.COMBAT
+	wave_spawn_queue.clear()
+	spawn_timer = 0.2
+	var enemy_count := 3 if wave == 1 else 5 + wave * 3
+	for index in range(enemy_count):
+		var kind: int = Enemy.EnemyKind.SCOUT
+		if wave >= 3 and index % 7 == 6:
+			kind = Enemy.EnemyKind.SPITTER
+		elif wave >= 2 and index % 5 == 4:
+			kind = Enemy.EnemyKind.BRUISER
+		wave_spawn_queue.append(kind)
+
+	wave_assault_timer = 7.0 if wave == 1 else 0.0
+	if hud:
+		if wave == 1:
+			hud.show_notice("第一波 · 少量侦察体在营地周围游荡", COLOR_AMBER, 2.2)
+		else:
+			hud.show_notice("第 %d / %d 波抵达" % [wave, TOTAL_WAVES], COLOR_RED, 1.8)
+	if audio:
+		audio.play_wave()
+		audio.play_music(&"anomaly")
 
 
-func _spawn_siege_enemy() -> void:
-	if siege_queue.is_empty():
+func _update_wave_logic(delta: float) -> void:
+	if phase == Phase.PREPARATION:
+		prep_timer = maxf(0.0, prep_timer - delta)
+		if Input.is_action_just_pressed("start_wave"):
+			prep_timer = 0.0
+		if prep_timer <= 0.0:
+			_begin_combat()
 		return
-	var kind: int = siege_queue.pop_front()
+
+	if phase != Phase.COMBAT:
+		return
+
+	if not wave_spawn_queue.is_empty():
+		spawn_timer -= delta
+		if spawn_timer <= 0.0:
+			_spawn_wave_enemy()
+			spawn_timer = 1.2 if wave == 1 else maxf(0.25, 0.82 - wave * 0.07)
+
+	if wave_assault_timer > 0.0:
+		wave_assault_timer = maxf(0.0, wave_assault_timer - delta)
+		if wave_assault_timer <= 0.0:
+			for enemy: Enemy in enemies:
+				if is_instance_valid(enemy) and enemy.get_meta(&"wave_enemy", false):
+					enemy.clear_wander()
+
+	if wave_spawn_queue.is_empty() and _wave_enemy_count() == 0:
+		_complete_wave()
+
+
+func _spawn_wave_enemy() -> void:
+	if wave_spawn_queue.is_empty():
+		return
+	var kind: int = wave_spawn_queue.pop_front()
+	var radius_min := 230.0 if wave == 1 else 760.0
+	var radius_max := 350.0 if wave == 1 else 980.0
 	var spawn_position := SHIP_POSITION + Vector2.from_angle(
 		rng.randf_range(0.0, TAU)
-	) * rng.randf_range(460.0, 650.0)
-	var destination_danger := int(LEVELS[pending_level_index]["danger"])
+	) * rng.randf_range(radius_min, radius_max)
 	var enemy := Enemy.new()
 	enemy.position = spawn_position
 	enemy.z_index = 4
-	enemy.configure(kind, spawn_position, SHIP_POSITION, 1.0 + destination_danger * 0.08)
+	enemy.configure(kind, spawn_position, SHIP_POSITION, 1.0 + (wave - 1) * 0.14)
 	add_child(enemy)
 	enemies.append(enemy)
-	enemy.set_meta(&"siege_enemy", true)
+	enemy.set_meta(&"wave_enemy", true)
 	enemy.attack_ship.connect(_on_enemy_attack_ship)
+	enemy.attack_player.connect(_on_enemy_attack_player)
 	enemy.projectile_requested.connect(_on_enemy_projectile_requested.bind(enemy))
 	enemy.defeated.connect(_on_enemy_defeated)
-	enemy.set_hunting_enabled(false)
+	enemy.set_player_target(player_marker, 440.0, 1040.0)
+	if wave == 1:
+		enemy.set_wander_around(SHIP_POSITION, 235.0)
+
+
+func _complete_wave() -> void:
+	score += wave * 120
+	if wave >= TOTAL_WAVES:
+		_finish_level_victory()
+		return
+	resources += 4
+	_start_preparation(wave + 1)
+
+
+func _finish_level_victory() -> void:
+	phase = Phase.VICTORY
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy):
+			enemy.set_physics_process(false)
+	for turret in turrets:
+		if turret is Turret and is_instance_valid(turret):
+			turret.set_active(false)
+	if audio:
+		audio.play_victory()
+		audio.play_music(&"discovery")
+	if hud:
+		hud.show_notice("本关完成 · 选择下一段航线", COLOR_CYAN, 2.2)
+	call_deferred("_open_level_select")
 
 
 func _finish_defeat() -> void:
@@ -892,7 +1051,7 @@ func _on_level_select_closed() -> void:
 	if phase != Phase.LEVEL_SELECT:
 		return
 	get_tree().paused = false
-	phase = Phase.EXPLORING
+	phase = level_select_return_phase
 	if audio:
 		audio.play_music(&"main")
 
@@ -904,6 +1063,8 @@ func _refresh_hud() -> void:
 		"location_name": "%s / %s" % [PLANET_NAME, LEVELS[current_level_index]["name"]],
 		"fuel": fuel,
 		"fuel_max": FUEL_MAX,
+		"resources": resources,
+		"deep_cores": deep_cores,
 		"player_health": player_health,
 		"player_health_max": player_health_max,
 		"stamina": stamina,
@@ -914,9 +1075,41 @@ func _refresh_hud() -> void:
 		"phase": _get_phase_name(),
 		"ship_hull": ship_hull,
 		"ship_hull_max": SHIP_HULL_MAX,
-		"defense_timer": siege_timer,
-		"siege_enemies": _siege_enemy_count(),
+		"wave": wave,
+		"total_waves": TOTAL_WAVES,
+		"wave_state": _get_wave_state_name(),
+		"timer": prep_timer if phase == Phase.PREPARATION else -1.0,
+		"wave_enemies": _wave_enemy_count(),
+		"score": score,
+		"world_size": WORLD_SIZE,
+		"base_position": SHIP_POSITION,
+		"player_position": player_position,
+		"fuel_marks": _fuel_marks(),
+		"resource_marks": _resource_marks(),
+		"enemy_marks": _enemy_marks(),
 	})
+
+
+func _fuel_marks() -> Array[Vector2]:
+	var marks: Array[Vector2] = []
+	for cell: Dictionary in fuel_cells:
+		marks.append(cell["position"])
+	return marks
+
+
+func _enemy_marks() -> Array[Vector2]:
+	var marks: Array[Vector2] = []
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy) and enemy.is_alive():
+			marks.append(enemy.global_position)
+	return marks
+
+
+func _resource_marks() -> Array[Vector2]:
+	var marks: Array[Vector2] = []
+	for crystal: Dictionary in crystals:
+		marks.append(crystal["position"])
+	return marks
 
 
 func _get_nearby_action() -> String:
@@ -928,15 +1121,22 @@ func _get_nearby_action() -> String:
 	if slot_index >= 0:
 		var turret: Turret = turrets[slot_index]
 		if turret == null:
-			return "E  建造炮台 #%d · %d 燃油" % [slot_index + 1, TURRET_BUILD_FUEL_COST]
+			return "E  建造炮台 #%d · %d 晶尘" % [slot_index + 1, TURRET_BUILD_COST]
 		if turret.get_level() >= 3:
 			return "炮台 #%d 已达到三级" % (slot_index + 1)
-		return "E  升级炮台 #%d · %d 燃油" % [slot_index + 1, turret.get_upgrade_cost()]
+		var core_suffix := " + 1 深核" if turret.get_level() == 2 else ""
+		return "E  升级炮台 #%d · %d 晶尘%s" % [
+			slot_index + 1,
+			turret.get_upgrade_cost(),
+			core_suffix,
+		]
 	if player_position.distance_to(SHIP_POSITION) <= PLAYER_INTERACT_RADIUS:
-		if phase == Phase.LAUNCH_DEFENSE:
-			return "起飞防守中 · E 修复船体"
-		return "E  登船并选择航线"
-	return "寻找橙色燃油罐"
+		if phase == Phase.VICTORY:
+			return "E  选择下一段航线"
+		if ship_hull < SHIP_HULL_MAX:
+			return "E  修复船体 · %d 晶尘" % REPAIR_COST
+		return "着陆船状态正常"
+	return "青色晶尘供炮台，橙色燃油供航程"
 
 
 func _get_phase_name() -> String:
@@ -944,23 +1144,43 @@ func _get_phase_name() -> String:
 		return "travel"
 	if phase == Phase.LEVEL_SELECT:
 		return "level_select"
-	if phase == Phase.LAUNCH_DEFENSE:
-		return "defense"
+	if phase == Phase.PREPARATION:
+		return "preparation"
+	if phase == Phase.COMBAT:
+		return "combat"
+	if phase == Phase.VICTORY:
+		return "victory"
 	if phase == Phase.DEFEAT:
 		return "defeat"
 	if not player_alive:
 		return "down"
-	return "exploring"
+	return "preparation"
 
 
-func _siege_enemy_count() -> int:
+func _get_wave_state_name() -> String:
+	if phase == Phase.PREPARATION:
+		return "准备阶段"
+	if phase == Phase.COMBAT:
+		return "交战中"
+	if phase == Phase.VICTORY:
+		return "关卡完成"
+	if phase == Phase.DEFEAT:
+		return "营地失守"
+	return "待命"
+
+
+func _wave_enemy_count() -> int:
 	var count := 0
 	for enemy: Enemy in enemies:
-		if (
-			is_instance_valid(enemy)
-			and enemy.has_meta(&"siege_enemy")
-			and enemy.get_meta(&"siege_enemy", false)
-		):
+		if is_instance_valid(enemy) and enemy.get_meta(&"wave_enemy", false):
+			count += 1
+	return count
+
+
+func _ambient_enemy_count() -> int:
+	var count := 0
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy) and not enemy.get_meta(&"wave_enemy", false):
 			count += 1
 	return count
 
@@ -1144,6 +1364,7 @@ func _finish_network_smoke(peer_id: int) -> void:
 
 
 func _draw() -> void:
+	_draw_crystals()
 	_draw_fuel_cells()
 	_draw_ship()
 	_draw_player()
@@ -1152,6 +1373,23 @@ func _draw() -> void:
 	_draw_particles()
 	if phase == Phase.TRAVEL:
 		_draw_travel_overlay()
+
+
+func _draw_crystals() -> void:
+	for crystal: Dictionary in crystals:
+		var center: Vector2 = crystal["position"]
+		center.y += sin(elapsed_time * 1.8 + crystal["phase"]) * 3.0
+		var is_deep: bool = crystal["kind"] == "deep"
+		var color := COLOR_VIOLET if is_deep else COLOR_CYAN
+		var radius := 15.0 if is_deep else 9.0
+		draw_circle(center, 22.0 if is_deep else 14.0, Color(color, 0.09))
+		draw_colored_polygon(PackedVector2Array([
+			center + Vector2(0.0, -radius),
+			center + Vector2(radius * 0.65, 0.0),
+			center + Vector2(0.0, radius),
+			center + Vector2(-radius * 0.65, 0.0),
+		]), color)
+		draw_circle(center, 2.5, COLOR_ICE)
 
 
 func _draw_fuel_cells() -> void:

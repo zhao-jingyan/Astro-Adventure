@@ -1,0 +1,41 @@
+{
+  "title": "Astral Signal 8-bit",
+  "description": "原创三段式太空探索配乐，复用 SIGNAL_A 与 SIGNAL_B 两个动机。",
+  "bpm": 112.0,
+  "sample_rate": 32000,
+  "beats_per_section": 32,
+  "motifs": {
+    "SIGNAL_A": "稳定探索动机",
+    "SIGNAL_B": "发现与展开动机"
+  },
+  "files": {
+    "a_main": {
+      "frames": 548571,
+      "duration_seconds": 17.143,
+      "rms_dbfs": -11.99,
+      "peak_dbfs": -1.94,
+      "path": "assets/audio/generated/astral_signal_a_main.wav"
+    },
+    "b_discovery": {
+      "frames": 548571,
+      "duration_seconds": 17.143,
+      "rms_dbfs": -10.72,
+      "peak_dbfs": -1.94,
+      "path": "assets/audio/generated/astral_signal_b_discovery.wav"
+    },
+    "c_anomaly": {
+      "frames": 548571,
+      "duration_seconds": 17.143,
+      "rms_dbfs": -18.18,
+      "peak_dbfs": -1.94,
+      "path": "assets/audio/generated/astral_signal_c_anomaly.wav"
+    },
+    "suite": {
+      "frames": 1645714,
+      "duration_seconds": 51.429,
+      "rms_dbfs": -13.06,
+      "peak_dbfs": -1.94,
+      "path": "assets/audio/generated/astral_signal_suite.wav"
+    }
+  }
+}

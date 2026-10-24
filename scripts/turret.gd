@@ -9,8 +9,8 @@ extends Node2D
 signal shot_requested(origin: Vector2, target: Node2D, damage: float, speed: float, color: Color)
 
 const MAX_LEVEL := 3
-const BASE_BUILD_COST := 3
-const UPGRADE_COSTS := [4, 6]
+const BASE_BUILD_COST := 14
+const UPGRADE_COSTS := [16, 26]
 
 const RANGE_BY_LEVEL := [280.0, 320.0, 360.0]
 const DAMAGE_BY_LEVEL := [11.0, 18.0, 27.0]

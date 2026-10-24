@@ -1,6 +1,6 @@
 extends SceneTree
 
-## 航程闭环测试：燃油不足、远航、切换地图和返回已访问关卡。
+## 关卡间航程测试：燃油独立支付、切图后恢复第一波准备工作，并允许返航。
 
 var _failures: Array[String] = []
 
@@ -13,33 +13,38 @@ func _run() -> void:
 	var game := await _create_game()
 	var far_index: int = game.LEVELS.size() - 1
 
+	game.phase = game.Phase.VICTORY
 	game.fuel = 0
+	game.call("_open_level_select")
 	game.call("_on_destination_selected", far_index)
 	_expect(
-		game.phase == game.Phase.EXPLORING and game.current_level_index == 0,
-		"燃油不足时不得切换关卡"
+		game.phase == game.Phase.LEVEL_SELECT,
+		"燃油不足时不得离开关卡选择"
 	)
+	game.level_select.close()
 
 	game.fuel = game.FUEL_MAX
+	game.phase = game.Phase.VICTORY
 	game.call("_open_level_select")
 	var options: Array = game.call("_build_level_options")
 	var far_cost := int(options[far_index]["fuel_cost"])
-	_expect(far_cost > 0, "远距离关卡应存在燃油成本")
 	game.call("_on_destination_selected", far_index)
-	_expect(game.phase == game.Phase.LAUNCH_DEFENSE, "选定目的地后应进入发射防守")
-	_expect(game.fuel == game.FUEL_MAX - far_cost, "远航应扣除对应燃油")
-	game.call("_update_launch_defense", 100.0)
-	_expect(game.phase == game.Phase.TRAVEL, "发射防守结束后应进入起飞")
+	_expect(game.phase == game.Phase.TRAVEL, "燃油充足时应在关卡间起飞")
+	_expect(game.fuel == game.FUEL_MAX - far_cost, "航程应扣除独立燃油")
 	game.call("_process", 2.0)
 	_expect(game.current_level_index == far_index, "航程结束后应加载目标地图")
+	_expect(
+		game.phase == game.Phase.PREPARATION and game.wave == 1,
+		"新关卡应从第一波准备倒计时重新开始"
+	)
 
 	game.fuel = game.FUEL_MAX
+	game.phase = game.Phase.VICTORY
 	game.call("_open_level_select")
 	game.call("_on_destination_selected", 0)
-	game.call("_update_launch_defense", 100.0)
 	game.call("_process", 2.0)
-	_expect(game.current_level_index == 0, "已访问关卡应允许再次进入以补充燃油")
-	_expect(game.phase == game.Phase.EXPLORING, "返航后应恢复探索阶段")
+	_expect(game.current_level_index == 0, "已访问关卡应允许返航")
+	_expect(game.phase == game.Phase.PREPARATION, "返航后应恢复新关卡准备工作")
 
 	game.audio.stop_all()
 	game.queue_free()
@@ -47,7 +52,7 @@ func _run() -> void:
 		await process_frame
 
 	if _failures.is_empty():
-		print("航程闭环测试通过：燃油限制、发射防守、远航和返回关卡均正常。")
+		print("航程闭环测试通过：关卡生命周期、独立燃油和返航均正常。")
 		quit(0)
 		return
 

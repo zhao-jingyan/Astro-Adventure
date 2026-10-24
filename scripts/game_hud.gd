@@ -23,10 +23,22 @@ const TRACKED_STATE_KEYS := [
 	"network_status",
 	"network_peers",
 	"phase",
+	"resources",
+	"deep_cores",
 	"ship_hull",
 	"ship_hull_max",
-	"defense_timer",
-	"siege_enemies",
+	"wave",
+	"total_waves",
+	"wave_state",
+	"timer",
+	"wave_enemies",
+	"score",
+	"world_size",
+	"base_position",
+	"player_position",
+	"fuel_marks",
+	"resource_marks",
+	"enemy_marks",
 ]
 
 const COLOR_BAR_BACKGROUND := Color(0.018, 0.038, 0.066, 0.86)
@@ -197,9 +209,10 @@ func _draw() -> void:
 	_update_ui_scale()
 	var font := ThemeDB.fallback_font
 	_draw_top_status(font)
-	_draw_defense_strip(font)
+	_draw_wave_strip(font)
 	_draw_input_hints(font)
 	_draw_nearby_action(font)
+	_draw_minimap(font)
 	_draw_notice(font)
 	_draw_phase_card(font)
 
@@ -267,10 +280,12 @@ func _draw_top_status(font: Font) -> void:
 	var fuel_x := region_right + roundf(12.0 * s)
 	var fuel_max := maxf(1.0, _state_number("fuel_max", 100.0))
 	var fuel := clampf(_state_number("fuel", 0.0), 0.0, fuel_max)
+	var crystal_count := maxi(0, int(_state_number("resources", 0.0)))
+	var deep_core_count := maxi(0, int(_state_number("deep_cores", 0.0)))
 	_draw_text(
 		font,
 		Vector2(fuel_x, label_y),
-		"燃油",
+		"燃油 / 晶尘 / 深核",
 		label_size,
 		COLOR_MUTED,
 		fuel_width - 20.0 * s
@@ -278,8 +293,8 @@ func _draw_top_status(font: Font) -> void:
 	_draw_text(
 		font,
 		Vector2(fuel_x, value_y),
-		"%d / %d" % [ceili(fuel), ceili(fuel_max)],
-		value_size,
+		"%d/%d · %d · %d" % [ceili(fuel), ceili(fuel_max), crystal_count, deep_core_count],
+		maxi(11, roundi(12.0 * s)),
 		COLOR_AMBER,
 		fuel_width - 20.0 * s
 	)
@@ -290,8 +305,8 @@ func _draw_top_status(font: Font) -> void:
 	_draw_network_tag(font, network_left, network_width, bar)
 
 
-func _draw_defense_strip(font: Font) -> void:
-	if _state_text("phase", "") != "defense":
+func _draw_wave_strip(font: Font) -> void:
+	if _state_text("phase", "") not in ["preparation", "combat"]:
 		return
 
 	var s := _ui_scale
@@ -306,8 +321,11 @@ func _draw_defense_strip(font: Font) -> void:
 
 	var hull_max := maxf(1.0, _state_number("ship_hull_max", 240.0))
 	var hull := clampf(_state_number("ship_hull", hull_max), 0.0, hull_max)
-	var timer := maxf(0.0, _state_number("defense_timer", 0.0))
-	var enemy_count := int(_state_number("siege_enemies", 0.0))
+	var timer := maxf(0.0, _state_number("timer", 0.0))
+	var enemy_count := int(_state_number("wave_enemies", 0.0))
+	var wave := int(_state_number("wave", 1.0))
+	var total_waves := int(_state_number("total_waves", 5.0))
+	var phase := _state_text("phase", "")
 	var font_size := maxi(10, roundi(11.0 * s))
 	var left := strip.position + Vector2(10.0 * s, 8.0 * s)
 
@@ -336,10 +354,13 @@ func _draw_defense_strip(font: Font) -> void:
 		COLOR_TEXT,
 		42.0 * s
 	)
+	var wave_status := "第 %d / %d 波 · 敌群 %d" % [wave, total_waves, enemy_count]
+	if phase == "preparation":
+		wave_status = "第 %d / %d 波倒计时 %02d" % [wave, total_waves, ceili(timer)]
 	_draw_text(
 		font,
 		Vector2(strip.position.x + strip.size.x - 236.0 * s, left.y),
-		"起飞倒计时 %02d  ·  敌群 %d" % [ceili(timer), enemy_count],
+		wave_status,
 		font_size,
 		COLOR_AMBER,
 		226.0 * s,
@@ -552,6 +573,122 @@ func _draw_nearby_action(font: Font) -> void:
 	)
 
 
+func _draw_minimap(font: Font) -> void:
+	var s := _ui_scale
+	var margin := roundf(18.0 * s)
+	var panel_width := minf(190.0 * s, size.x * 0.22)
+	var panel_height := minf(126.0 * s, size.y * 0.24)
+	var panel := Rect2(
+		Vector2(size.x - margin - panel_width, size.y - margin - panel_height),
+		Vector2(panel_width, panel_height)
+	)
+	draw_rect(panel, COLOR_BAR_BACKGROUND_SOFT)
+	draw_rect(panel, _with_alpha(COLOR_BORDER, 0.72), false, maxf(1.0, s))
+
+	_draw_text(
+		font,
+		panel.position + Vector2(9.0 * s, 7.0 * s),
+		"区域图",
+		maxi(9, roundi(10.0 * s)),
+		COLOR_MUTED,
+		panel.size.x - 18.0 * s
+	)
+
+	var map_rect := Rect2(
+		panel.position + Vector2(9.0 * s, 23.0 * s),
+		panel.size - Vector2(18.0 * s, 32.0 * s)
+	)
+	draw_rect(map_rect, Color(0.09, 0.065, 0.045, 0.92))
+	draw_rect(map_rect, _with_alpha(COLOR_BORDER, 0.38), false, maxf(1.0, s))
+
+	var world_size_value: Variant = _try_vector2(_state.get("world_size"))
+	if (
+		world_size_value == null
+		or Vector2(world_size_value).x <= 0.0
+		or Vector2(world_size_value).y <= 0.0
+	):
+		return
+	var world_size := Vector2(world_size_value)
+
+	var fuel_marks: Variant = _state.get("fuel_marks", [])
+	if fuel_marks is Array:
+		for mark: Variant in fuel_marks:
+			var world_position_value: Variant = _try_vector2(mark)
+			if world_position_value == null:
+				continue
+			draw_circle(
+				_world_to_minimap(Vector2(world_position_value), world_size, map_rect),
+				1.8 * s,
+				COLOR_AMBER
+			)
+
+	var resource_marks: Variant = _state.get("resource_marks", [])
+	if resource_marks is Array:
+		for mark: Variant in resource_marks:
+			var world_position_value: Variant = _try_vector2(mark)
+			if world_position_value == null:
+				continue
+			draw_circle(
+				_world_to_minimap(Vector2(world_position_value), world_size, map_rect),
+				1.4 * s,
+				COLOR_CYAN
+			)
+
+	var enemy_marks: Variant = _state.get("enemy_marks", [])
+	if enemy_marks is Array:
+		for mark: Variant in enemy_marks:
+			var world_position_value: Variant = _try_vector2(mark)
+			if world_position_value == null:
+				continue
+			var enemy_point: Vector2 = _world_to_minimap(
+				Vector2(world_position_value),
+				world_size,
+				map_rect
+			)
+			draw_colored_polygon(PackedVector2Array([
+				enemy_point + Vector2(0.0, -2.2 * s),
+				enemy_point + Vector2(2.2 * s, 2.0 * s),
+				enemy_point + Vector2(-2.2 * s, 2.0 * s),
+			]), COLOR_DANGER)
+
+	var base_value: Variant = _try_vector2(_state.get("base_position"))
+	if base_value != null:
+		var base_point: Vector2 = _world_to_minimap(Vector2(base_value), world_size, map_rect)
+		draw_colored_polygon(PackedVector2Array([
+			base_point + Vector2(0.0, -4.0 * s),
+			base_point + Vector2(4.0 * s, 0.0),
+			base_point + Vector2(0.0, 4.0 * s),
+			base_point + Vector2(-4.0 * s, 0.0),
+		]), COLOR_CYAN)
+
+	var player_value: Variant = _try_vector2(_state.get("player_position"))
+	if player_value != null:
+		var player_point: Vector2 = _world_to_minimap(Vector2(player_value), world_size, map_rect)
+		draw_circle(player_point, 3.0 * s, COLOR_TEXT)
+		draw_arc(player_point, 5.5 * s, 0.0, TAU, 16, COLOR_CYAN, maxf(1.0, s))
+
+
+func _world_to_minimap(
+	world_position: Vector2,
+	world_size: Vector2,
+	map_rect: Rect2
+) -> Vector2:
+	return map_rect.position + Vector2(
+		clampf(world_position.x / world_size.x, 0.0, 1.0) * map_rect.size.x,
+		clampf(world_position.y / world_size.y, 0.0, 1.0) * map_rect.size.y
+	)
+
+
+func _try_vector2(value: Variant) -> Variant:
+	if value is Vector2:
+		return value
+	if value is Vector2i:
+		return Vector2(value)
+	if value is Array and (value as Array).size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return null
+
+
 func _draw_notice(font: Font) -> void:
 	if _notice_text.is_empty() or _notice_alpha <= 0.0:
 		return
@@ -563,7 +700,7 @@ func _draw_notice(font: Font) -> void:
 	var width := minf(size.x - margin * 2.0, 460.0 * s)
 	var height := maxf(30.0, roundf(34.0 * s))
 	var notice_rect := Rect2(
-		Vector2((size.x - width) * 0.5, top_bar.end.y + roundf(10.0 * s)),
+		Vector2((size.x - width) * 0.5, top_bar.end.y + roundf(44.0 * s)),
 		Vector2(width, height)
 	)
 	var alpha := _notice_alpha

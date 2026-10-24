@@ -1,15 +1,23 @@
 class_name GameAudio
 extends Node
 
-## 程序化深空电子音效。
+## 程序化深空电子音效与分段背景音乐。
 ##
-## 所有波形均在 _ready() 中生成一次，不依赖外部音频文件。
-## 播放方法可安全地在 headless 环境中调用。
+## 音效在 _ready() 中程序化生成；背景音乐读取脚本生成的 WAV。
+## 所有播放方法都可在 headless 环境中安全调用。
 
 const SAMPLE_RATE := 22050
 const PLAYER_POOL_SIZE := 12
 const MAX_VOICES_PER_FRAME := 3
 const DEFAULT_MASTER_LINEAR := 0.78
+const MUSIC_VOLUME_DB := -15.0
+const MUSIC_FADE_SECONDS := 0.65
+
+const MUSIC_TRACKS := {
+	&"main": preload("res://assets/audio/generated/astral_signal_a_main.wav"),
+	&"discovery": preload("res://assets/audio/generated/astral_signal_b_discovery.wav"),
+	&"anomaly": preload("res://assets/audio/generated/astral_signal_c_anomaly.wav"),
+}
 
 const EFFECT_VOLUME_DB := {
 	&"shoot": -9.5,
@@ -39,6 +47,10 @@ const EFFECT_COOLDOWN_MS := {
 
 var _streams: Dictionary = {}
 var _players: Array[AudioStreamPlayer] = []
+var _music_players: Array[AudioStreamPlayer] = []
+var _music_tween: Tween
+var _active_music_player := 0
+var _current_music: StringName = &""
 var _next_player_index := 0
 var _last_play_frame := -1
 var _voices_this_frame := 0
@@ -60,6 +72,7 @@ func _ready() -> void:
 	_rng.seed = 0x5A17C0DE
 	_build_sound_library()
 	_create_player_pool()
+	_create_music_players()
 	_initialized = true
 
 
@@ -68,6 +81,10 @@ func _exit_tree() -> void:
 		player.stop()
 		player.stream = null
 	_players.clear()
+	for music_player: AudioStreamPlayer in _music_players:
+		music_player.stop()
+		music_player.stream = null
+	_music_players.clear()
 	_streams.clear()
 	_initialized = false
 
@@ -126,6 +143,7 @@ func play_defeat() -> void:
 func set_master_volume(linear: float) -> void:
 	_master_linear = clampf(linear, 0.0, 1.0)
 	_refresh_player_volumes()
+	_refresh_music_volume()
 
 
 ## 立即停止所有正在播放的音效，供场景切换和自动化测试清理。
@@ -133,6 +151,71 @@ func stop_all() -> void:
 	for player: AudioStreamPlayer in _players:
 		player.stop()
 		player.stream = null
+	stop_music(0.0)
+
+
+## 切换背景音乐；相同段落正在播放时保持连续，不重新开始。
+func play_music(track_id: StringName, fade_seconds: float = MUSIC_FADE_SECONDS) -> void:
+	if not _initialized or _music_players.size() < 2:
+		return
+	if not MUSIC_TRACKS.has(track_id):
+		return
+	if _current_music == track_id and _music_players[_active_music_player].playing:
+		return
+
+	var incoming_index := 1 - _active_music_player
+	var incoming := _music_players[incoming_index]
+	var outgoing := _music_players[_active_music_player]
+	var source := MUSIC_TRACKS[track_id] as AudioStreamWAV
+	if source == null:
+		return
+
+	var music_stream := source.duplicate() as AudioStreamWAV
+	music_stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	music_stream.loop_begin = 0
+	music_stream.loop_end = int(round(music_stream.get_length() * music_stream.mix_rate))
+
+	if _music_tween and _music_tween.is_valid():
+		_music_tween.kill()
+
+	incoming.stop()
+	incoming.stream = music_stream
+	incoming.volume_db = -80.0
+	incoming.play()
+
+	_active_music_player = incoming_index
+	_current_music = track_id
+	var target_volume := _combined_music_volume_db()
+
+	if fade_seconds <= 0.0:
+		incoming.volume_db = target_volume
+		if outgoing != incoming and outgoing.playing:
+			outgoing.stop()
+		return
+
+	_music_tween = create_tween().set_parallel(true)
+	_music_tween.tween_property(incoming, "volume_db", target_volume, fade_seconds)
+	if outgoing != incoming and outgoing.playing:
+		_music_tween.tween_property(outgoing, "volume_db", -80.0, fade_seconds)
+		_music_tween.chain().tween_callback(outgoing.stop)
+
+
+func stop_music(fade_seconds: float = MUSIC_FADE_SECONDS) -> void:
+	if _music_players.is_empty():
+		return
+	if _music_tween and _music_tween.is_valid():
+		_music_tween.kill()
+
+	var active := _music_players[_active_music_player]
+	_current_music = &""
+	if fade_seconds <= 0.0 or not active.playing:
+		for music_player: AudioStreamPlayer in _music_players:
+			music_player.stop()
+		return
+
+	_music_tween = create_tween()
+	_music_tween.tween_property(active, "volume_db", -80.0, fade_seconds)
+	_music_tween.tween_callback(active.stop)
 
 
 func _create_player_pool() -> void:
@@ -146,6 +229,17 @@ func _create_player_pool() -> void:
 		player.volume_db = _combined_volume_db(-10.0)
 		add_child(player)
 		_players.append(player)
+
+
+func _create_music_players() -> void:
+	_music_players.clear()
+	for index in range(2):
+		var player := AudioStreamPlayer.new()
+		player.name = "MusicVoice%02d" % (index + 1)
+		player.bus = &"Master"
+		player.volume_db = -80.0
+		add_child(player)
+		_music_players.append(player)
 
 
 func _build_sound_library() -> void:
@@ -215,10 +309,24 @@ func _refresh_player_volumes() -> void:
 		player.volume_db = _combined_volume_db(base_volume_db)
 
 
+func _refresh_music_volume() -> void:
+	if _music_players.is_empty():
+		return
+	var active := _music_players[_active_music_player]
+	if active.playing:
+		active.volume_db = _combined_music_volume_db()
+
+
 func _combined_volume_db(base_volume_db: float) -> float:
 	if _master_linear <= 0.0001:
 		return -80.0
 	return base_volume_db + linear_to_db(_master_linear)
+
+
+func _combined_music_volume_db() -> float:
+	if _master_linear <= 0.0001:
+		return -80.0
+	return MUSIC_VOLUME_DB + linear_to_db(_master_linear)
 
 
 func _generate_shoot() -> PackedFloat32Array:

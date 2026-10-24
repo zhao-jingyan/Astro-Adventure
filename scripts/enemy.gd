@@ -59,6 +59,12 @@ var _aggro_radius := 430.0
 var _leash_radius := 1050.0
 var _hunting_player := false
 var _hunting_enabled := true
+var _wandering := false
+var _wander_center := Vector2.ZERO
+var _wander_radius := 0.0
+var _wander_target := Vector2.ZERO
+var _wander_pause := 0.0
+var _wander_rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
@@ -85,6 +91,9 @@ func _physics_process(delta: float) -> void:
 
 	# 玩家追击拥有更高优先级，追击期间不会再执行基地攻击分支。
 	if _update_player_hunt(delta):
+		return
+
+	if _update_wander(delta):
 		return
 
 	_update_base_behavior(delta)
@@ -144,6 +153,24 @@ func set_hunting_enabled(enabled: bool) -> void:
 func clear_player_target() -> void:
 	_player_target = null
 	_hunting_player = false
+
+
+## 在指定中心附近低速游荡，不主动攻击，直到外部解除该状态。
+func set_wander_around(center: Vector2, radius: float) -> void:
+	_wandering = true
+	_wander_center = center
+	_wander_radius = maxf(radius, 0.0)
+	_wander_pause = 0.0
+	_wander_rng.seed = int(get_instance_id())
+	_pick_wander_target()
+
+
+func clear_wander() -> void:
+	_wandering = false
+
+
+func is_wandering() -> bool:
+	return _wandering
 
 
 ## 配置敌人的类型、出生点、基地中心和波次强度。
@@ -256,6 +283,7 @@ func receive_damage(amount: float, impulse: Vector2 = Vector2.ZERO) -> void:
 	if amount > 0.0:
 		_health = maxf(_health - amount, 0.0)
 		_flash_time = HIT_FLASH_DURATION
+		clear_wander()
 
 	if not impulse.is_zero_approx():
 		_knockback_velocity = (_knockback_velocity + impulse).limit_length(MAX_KNOCKBACK_SPEED)
@@ -328,6 +356,30 @@ func _update_player_hunt(delta: float) -> bool:
 	return true
 
 
+func _update_wander(delta: float) -> bool:
+	if not _wandering or not _alive:
+		return false
+
+	if _wander_pause > 0.0:
+		_wander_pause = maxf(0.0, _wander_pause - delta)
+		return true
+
+	var offset := _wander_target - global_position
+	if offset.length() <= ARRIVAL_DISTANCE:
+		_wander_pause = _wander_rng.randf_range(0.35, 1.15)
+		_pick_wander_target()
+		return true
+
+	_move_toward_position(_wander_target, delta, 0.52)
+	return true
+
+
+func _pick_wander_target() -> void:
+	var angle := _wander_rng.randf_range(0.0, TAU)
+	var distance := sqrt(_wander_rng.randf()) * _wander_radius
+	_wander_target = _wander_center + Vector2.from_angle(angle) * distance
+
+
 func _has_valid_player_target() -> bool:
 	if not is_instance_valid(_player_target) or _player_target.is_queued_for_deletion():
 		clear_player_target()
@@ -364,14 +416,18 @@ func _move_toward_approach_position(delta: float) -> void:
 	queue_redraw()
 
 
-func _move_toward_position(destination: Vector2, delta: float) -> void:
+func _move_toward_position(
+	destination: Vector2,
+	delta: float,
+	speed_multiplier: float = 1.0
+) -> void:
 	var offset := destination - global_position
 	var distance := offset.length()
 	if distance <= ARRIVAL_DISTANCE:
 		return
 
 	var direction := offset / distance
-	global_position += direction * minf(_move_speed * delta, distance)
+	global_position += direction * minf(_move_speed * speed_multiplier * delta, distance)
 	queue_redraw()
 
 
@@ -428,6 +484,7 @@ func _die() -> void:
 
 	_alive = false
 	clear_player_target()
+	clear_wander()
 	set_physics_process(false)
 	set_process(false)
 	defeated.emit(self, _reward)

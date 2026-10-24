@@ -53,20 +53,36 @@ var _rocks: Array[Dictionary] = []
 var _dust_motes: Array[Dictionary] = []
 var _moss_clusters: Array[Dictionary] = []
 var _crystal_veins: Array[Dictionary] = []
+var _ground_flecks: Array[Dictionary] = []
+var _safe_flecks: Array[Dictionary] = []
+var _safe_pebbles: Array[Dictionary] = []
+var _safe_wind_strokes: Array[PackedVector2Array] = []
 
 var _safe_basin: PackedVector2Array = PackedVector2Array()
 var _safe_basin_inner: PackedVector2Array = PackedVector2Array()
 var _safe_basin_shadow: PackedVector2Array = PackedVector2Array()
 var _safe_basin_rim: PackedVector2Array = PackedVector2Array()
 var _safe_sediment_lines: Array[PackedVector2Array] = []
+var _last_camera_center := Vector2(INF, INF)
 
 
 func _ready() -> void:
 	z_as_relative = false
 	z_index = BACKGROUND_Z_INDEX
-	process_mode = Node.PROCESS_MODE_DISABLED
+	process_mode = Node.PROCESS_MODE_INHERIT
 	if not _configured:
 		configure(MIN_WORLD_SIZE, MIN_WORLD_SIZE * 0.5, 137)
+
+
+func _process(_delta: float) -> void:
+	var camera_2d := get_viewport().get_camera_2d()
+	if not camera_2d:
+		return
+	var camera_center := camera_2d.get_screen_center_position()
+	if camera_center.distance_squared_to(_last_camera_center) <= 0.25:
+		return
+	_last_camera_center = camera_center
+	queue_redraw()
 
 
 ## 以固定种子重建一颗星球的完整地表。
@@ -152,6 +168,8 @@ func get_generation_summary() -> Dictionary:
 		"cracks": _cracks.size(),
 		"moss_clusters": _moss_clusters.size(),
 		"crystal_veins": _crystal_veins.size(),
+		"ground_flecks": _ground_flecks.size(),
+		"safe_texture_details": _safe_flecks.size() + _safe_pebbles.size(),
 	}
 
 
@@ -165,6 +183,10 @@ func _generate_all() -> void:
 	_moss_clusters.clear()
 	_crystal_veins.clear()
 	_safe_sediment_lines.clear()
+	_ground_flecks.clear()
+	_safe_flecks.clear()
+	_safe_pebbles.clear()
+	_safe_wind_strokes.clear()
 
 	_rng.seed = terrain_seed
 	_generate_safe_basin()
@@ -176,6 +198,7 @@ func _generate_all() -> void:
 	_generate_rocks(_rng.randi_range(ROCK_COUNT_MIN, ROCK_COUNT_MAX))
 	_generate_moss_clusters(42)
 	_generate_dust_motes(_rng.randi_range(DUST_COUNT_MIN, DUST_COUNT_MAX))
+	_generate_ground_texture()
 
 
 func _generate_safe_basin() -> void:
@@ -212,6 +235,52 @@ func _generate_safe_basin() -> void:
 			var ripple := sin(ratio * PI * 2.0 + float(index) * 0.9) * 5.0
 			points.append(base_position + Vector2(x_offset, y_offset + ripple))
 		_safe_sediment_lines.append(points)
+
+	# 安全区需要更细的砂砾层次，否则大块纯色会让着陆区显得没有地表细节。
+	for index in range(620):
+		var angle := _rng.randf_range(0.0, TAU)
+		var radial := sqrt(_rng.randf())
+		var offset := Vector2(
+			cos(angle) * outer_radii.x * radial * 0.94,
+			sin(angle) * outer_radii.y * radial * 0.94
+		)
+		var fleck_color := COLOR_SAFE_LIGHT if index % 3 == 0 else COLOR_BROWN
+		fleck_color.a = _rng.randf_range(0.08, 0.24)
+		_safe_flecks.append({
+			"position": base_position + offset,
+			"radius": _rng.randf_range(0.55, 2.2),
+			"length": _rng.randf_range(2.0, 8.0),
+			"rotation": _rng.randf_range(-0.35, 0.2),
+			"color": fleck_color,
+		})
+
+	for index in range(150):
+		var angle := _rng.randf_range(0.0, TAU)
+		var radial := sqrt(_rng.randf()) * 0.9
+		var pebble_position := base_position + Vector2(
+			cos(angle) * outer_radii.x * radial,
+			sin(angle) * outer_radii.y * radial
+		)
+		_safe_pebbles.append({
+			"position": pebble_position,
+			"radius": _rng.randf_range(1.4, 4.2),
+			"color": Color(COLOR_BROWN, _rng.randf_range(0.16, 0.34)),
+		})
+
+	for index in range(72):
+		var angle := _rng.randf_range(0.0, TAU)
+		var radial := sqrt(_rng.randf()) * 0.82
+		var start := base_position + Vector2(
+			cos(angle) * outer_radii.x * radial,
+			sin(angle) * outer_radii.y * radial
+		)
+		var direction := Vector2.from_angle(_rng.randf_range(-0.2, 0.08))
+		var stroke := PackedVector2Array([start])
+		for point_index in range(3):
+			start += direction * _rng.randf_range(7.0, 18.0)
+			direction = direction.rotated(_rng.randf_range(-0.12, 0.12))
+			stroke.append(start)
+		_safe_wind_strokes.append(stroke)
 
 
 func _generate_terrain_washes(count: int) -> void:
@@ -551,6 +620,29 @@ func _generate_dust_motes(count: int) -> void:
 		})
 
 
+func _generate_ground_texture() -> void:
+	for index in range(3200):
+		var position := Vector2(
+			_rng.randf_range(12.0, world_size.x - 12.0),
+			_rng.randf_range(12.0, world_size.y - 12.0)
+		)
+		var biome := get_biome_at(position)
+		var color := COLOR_RUST_LIGHT
+		if biome == "safe":
+			color = COLOR_SAFE_LIGHT
+		elif biome == "deep":
+			color = COLOR_DEEP_DUST.lightened(0.12)
+		color.a = _rng.randf_range(0.07, 0.2)
+		_ground_flecks.append({
+			"position": position,
+			"radius": _rng.randf_range(0.5, 1.7),
+			"length": _rng.randf_range(1.0, 5.0),
+			"rotation": _rng.randf_range(-0.25, 0.15),
+			"color": color,
+			"show_streak": index % 4 == 0,
+		})
+
+
 func _pick_surface_color(biome: String, index: int) -> Color:
 	var choose := (index * 7 + terrain_seed) % 5
 	if biome == "safe":
@@ -726,6 +818,20 @@ func _draw() -> void:
 		for stroke: PackedVector2Array in patch["strata"]:
 			draw_polyline(stroke, patch["rim_color"], 1.1, true)
 
+	for fleck: Dictionary in _ground_flecks:
+		if not _view_rect.has_point(fleck["position"]):
+			continue
+		var fleck_color: Color = fleck["color"]
+		draw_circle(fleck["position"], float(fleck["radius"]), fleck_color)
+		if fleck["show_streak"]:
+			draw_line(
+				fleck["position"],
+				Vector2(fleck["position"]) + Vector2.from_angle(float(fleck["rotation"])) * float(fleck["length"]),
+				Color(fleck_color, fleck_color.a * 0.72),
+				1.0,
+				true
+			)
+
 	if _points_visible(_safe_basin):
 		_draw_safe_basin()
 
@@ -810,13 +916,20 @@ var _view_rect := Rect2()
 
 
 func _update_visible_world_rect() -> void:
-	var viewport_rect := get_viewport_rect()
-	var inverse_canvas := get_canvas_transform().affine_inverse()
-	var corner_a := inverse_canvas * viewport_rect.position
-	var corner_b := inverse_canvas * (viewport_rect.position + viewport_rect.size)
-	var top_left := Vector2(minf(corner_a.x, corner_b.x), minf(corner_a.y, corner_b.y))
-	var bottom_right := Vector2(maxf(corner_a.x, corner_b.x), maxf(corner_a.y, corner_b.y))
-	_view_rect = Rect2(top_left, bottom_right - top_left).grow(260.0)
+	var camera_2d := get_viewport().get_camera_2d()
+	if camera_2d:
+		var zoom := camera_2d.zoom
+		var visible_size := get_viewport_rect().size / Vector2(
+			maxf(zoom.x, 0.001),
+			maxf(zoom.y, 0.001)
+		)
+		_view_rect = Rect2(
+			camera_2d.get_screen_center_position() - visible_size * 0.5,
+			visible_size
+		).grow(260.0)
+		return
+
+	_view_rect = get_viewport_rect().grow(260.0)
 
 
 func _points_visible(points: PackedVector2Array) -> bool:
@@ -838,5 +951,25 @@ func _draw_safe_basin() -> void:
 	draw_colored_polygon(_safe_basin, COLOR_SAFE_SAND)
 	draw_colored_polygon(_safe_basin_inner, Color(COLOR_SAFE_LIGHT, 0.52))
 	draw_polyline(_safe_basin_rim, Color(COLOR_OCHRE_LIGHT, 0.32), 2.0, true)
+	for stroke: PackedVector2Array in _safe_wind_strokes:
+		draw_polyline(stroke, Color(COLOR_BROWN, 0.16), 1.1, true)
 	for line: PackedVector2Array in _safe_sediment_lines:
 		draw_polyline(line, Color(COLOR_BROWN, 0.16), 1.0, true)
+	for fleck: Dictionary in _safe_flecks:
+		if not _view_rect.has_point(fleck["position"]):
+			continue
+		var fleck_color: Color = fleck["color"]
+		draw_circle(fleck["position"], float(fleck["radius"]), fleck_color)
+		if int(round(float(fleck["radius"]) * 100.0)) % 2 == 0:
+			draw_line(
+				Vector2(fleck["position"]) - Vector2.from_angle(float(fleck["rotation"])) * float(fleck["length"]) * 0.5,
+				Vector2(fleck["position"]) + Vector2.from_angle(float(fleck["rotation"])) * float(fleck["length"]) * 0.5,
+				Color(fleck_color, fleck_color.a * 0.75),
+				1.0,
+				true
+			)
+	for pebble: Dictionary in _safe_pebbles:
+		if not _view_rect.has_point(pebble["position"]):
+			continue
+		var pebble_color: Color = pebble["color"]
+		draw_circle(pebble["position"], float(pebble["radius"]), pebble_color)

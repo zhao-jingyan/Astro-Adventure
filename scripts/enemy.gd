@@ -24,8 +24,8 @@ signal defeated(enemy: Node, reward: int)
 const FORMATION_GOLDEN_ANGLE := 2.399963229728653
 const ARRIVAL_DISTANCE := 2.5
 const HIT_FLASH_DURATION := 0.1
-const MAX_KNOCKBACK_SPEED := 560.0
-const KNOCKBACK_DECELERATION := 760.0
+const MAX_KNOCKBACK_SPEED := 360.0
+const KNOCKBACK_DECELERATION := 520.0
 const PLAYER_MELEE_REACH := 24.0
 
 var _kind: EnemyKind = EnemyKind.SCOUT
@@ -167,11 +167,11 @@ func configure(
 	match kind:
 		EnemyKind.SCOUT:
 			base_health = 42.0
-			base_speed = 136.0
+			base_speed = 76.0
 			base_radius = 12.0
 			base_reward = 6
 			base_damage = 9.0
-			base_interval = 1.05
+			base_interval = 1.35
 			formation_gap = 54.0
 			_projectile_speed = 0.0
 			_attack_range = 0.0
@@ -179,11 +179,11 @@ func configure(
 			_body_color = Color("#35d9ff")
 		EnemyKind.BRUISER:
 			base_health = 180.0
-			base_speed = 58.0
+			base_speed = 34.0
 			base_radius = 22.0
 			base_reward = 20
 			base_damage = 22.0
-			base_interval = 2.15
+			base_interval = 2.6
 			formation_gap = 92.0
 			_projectile_speed = 0.0
 			_attack_range = 0.0
@@ -191,13 +191,13 @@ func configure(
 			_body_color = Color("#ff7a45")
 		EnemyKind.SPITTER:
 			base_health = 74.0
-			base_speed = 88.0
+			base_speed = 48.0
 			base_radius = 15.0
 			base_reward = 13
 			base_damage = 11.0
-			base_interval = 1.55
+			base_interval = 2.0
 			formation_gap = 166.0
-			_projectile_speed = 310.0
+			_projectile_speed = 165.0
 			_attack_range = 350.0
 			_projectile_color = Color("#9dff6a")
 			_body_color = Color("#b66cff")

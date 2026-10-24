@@ -9,14 +9,14 @@ extends Node2D
 signal shot_requested(origin: Vector2, target: Node2D, damage: float, speed: float, color: Color)
 
 const MAX_LEVEL := 3
-const BASE_BUILD_COST := 14
-const UPGRADE_COSTS := [16, 26]
+const BASE_BUILD_COST := 3
+const UPGRADE_COSTS := [4, 6]
 
-const RANGE_BY_LEVEL := [310.0, 355.0, 405.0]
-const DAMAGE_BY_LEVEL := [12.0, 20.0, 33.0]
-const FIRE_RATE_BY_LEVEL := [1.6, 2.2, 3.0]
-const PROJECTILE_SPEED_BY_LEVEL := [480.0, 570.0, 680.0]
-const AIM_SPEED_BY_LEVEL := [8.0, 10.5, 13.0]
+const RANGE_BY_LEVEL := [280.0, 320.0, 360.0]
+const DAMAGE_BY_LEVEL := [11.0, 18.0, 27.0]
+const FIRE_RATE_BY_LEVEL := [0.85, 1.1, 1.45]
+const PROJECTILE_SPEED_BY_LEVEL := [235.0, 275.0, 315.0]
+const AIM_SPEED_BY_LEVEL := [4.8, 6.0, 7.2]
 
 const DEFAULT_BASE_POSITION := Vector2(640.0, 360.0)
 const FIRE_ANGLE_TOLERANCE := 0.16

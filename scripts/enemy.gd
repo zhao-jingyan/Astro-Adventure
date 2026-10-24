@@ -11,6 +11,7 @@ enum EnemyKind {
 }
 
 signal attack_ship(damage: float)
+signal attack_player(damage: float)
 signal projectile_requested(
 	origin: Vector2,
 	direction: Vector2,
@@ -25,6 +26,7 @@ const ARRIVAL_DISTANCE := 2.5
 const HIT_FLASH_DURATION := 0.1
 const MAX_KNOCKBACK_SPEED := 560.0
 const KNOCKBACK_DECELERATION := 760.0
+const PLAYER_MELEE_REACH := 24.0
 
 var _kind: EnemyKind = EnemyKind.SCOUT
 var _target_position := Vector2.ZERO
@@ -52,6 +54,12 @@ var _knockback_velocity := Vector2.ZERO
 var _flash_time := 0.0
 var _animation_time := 0.0
 
+var _player_target: Node2D
+var _aggro_radius := 430.0
+var _leash_radius := 1050.0
+var _hunting_player := false
+var _hunting_enabled := true
+
 
 func _ready() -> void:
 	set_physics_process(_configured and _alive)
@@ -75,6 +83,14 @@ func _physics_process(delta: float) -> void:
 	_attack_timer = maxf(_attack_timer - delta, 0.0)
 	_apply_knockback(delta)
 
+	# 玩家追击拥有更高优先级，追击期间不会再执行基地攻击分支。
+	if _update_player_hunt(delta):
+		return
+
+	_update_base_behavior(delta)
+
+
+func _update_base_behavior(delta: float) -> void:
 	var to_target := _target_position - global_position
 	var target_distance := to_target.length()
 
@@ -97,6 +113,37 @@ func _physics_process(delta: float) -> void:
 	if target_distance > 0.001:
 		_facing = to_target / target_distance
 	_try_melee_attack()
+
+
+func set_player_target(
+	target: Node2D,
+	aggro_radius: float = 430.0,
+	leash_radius: float = 1050.0
+) -> void:
+	_aggro_radius = maxf(aggro_radius, 0.0)
+	_leash_radius = maxf(leash_radius, _aggro_radius)
+	_hunting_player = false
+
+	if not is_instance_valid(target) or target.is_queued_for_deletion():
+		_player_target = null
+		return
+
+	_player_target = target
+
+
+func is_hunting_player() -> bool:
+	return _hunting_player and _has_valid_player_target()
+
+
+func set_hunting_enabled(enabled: bool) -> void:
+	_hunting_enabled = enabled
+	if not _hunting_enabled:
+		_hunting_player = false
+
+
+func clear_player_target() -> void:
+	_player_target = null
+	_hunting_player = false
 
 
 ## 配置敌人的类型、出生点、基地中心和波次强度。
@@ -179,6 +226,7 @@ func configure(
 	_flash_time = 0.0
 	_attack_timer = 0.0
 	_knockback_velocity = Vector2.ZERO
+	_hunting_player = false
 
 	# 用稳定的黄金角序列给每个实例分配环形站位。
 	var kind_offset := float(kind) * 0.71
@@ -245,6 +293,65 @@ func get_target_position() -> Vector2:
 	return _target_position
 
 
+func _update_player_hunt(delta: float) -> bool:
+	if not _hunting_enabled or not _has_valid_player_target():
+		return false
+
+	var player_position := _player_target.global_position
+	var distance_to_player := global_position.distance_to(player_position)
+
+	if not _hunting_player:
+		if distance_to_player > _aggro_radius:
+			return false
+		_hunting_player = true
+
+	# 超出牵引范围后立即放弃，当前帧回到原有基地行为。
+	if distance_to_player > _leash_radius:
+		_hunting_player = false
+		return false
+
+	var to_player := player_position - global_position
+	if not to_player.is_zero_approx():
+		_facing = to_player.normalized()
+
+	if _kind == EnemyKind.SPITTER:
+		if distance_to_player <= _attack_range:
+			_try_ranged_attack()
+		_move_toward_position(player_position, delta)
+		return true
+
+	var melee_reach := _radius + PLAYER_MELEE_REACH
+	if distance_to_player > melee_reach:
+		_move_toward_position(player_position, delta)
+	else:
+		_try_melee_player_attack()
+	return true
+
+
+func _has_valid_player_target() -> bool:
+	if not is_instance_valid(_player_target) or _player_target.is_queued_for_deletion():
+		clear_player_target()
+		return false
+
+	# 约定玩家节点通过 is_alive() 暴露存活状态；失效或死亡时安全回退。
+	if _player_target.has_method("is_alive"):
+		var alive_value: Variant = _player_target.call("is_alive")
+		if not bool(alive_value):
+			clear_player_target()
+			return false
+	else:
+		# 兼容直接暴露存活布尔属性的玩家节点。
+		for property_name: StringName in [&"is_alive", &"player_alive", &"alive"]:
+			if property_name in _player_target:
+				var state_value: Variant = _player_target.get(property_name)
+				if state_value is bool and not bool(state_value):
+					clear_player_target()
+					return false
+				break
+
+	return true
+
+
 func _move_toward_approach_position(delta: float) -> void:
 	var offset := _approach_position - global_position
 	var distance := offset.length()
@@ -253,6 +360,17 @@ func _move_toward_approach_position(delta: float) -> void:
 
 	var direction := offset / distance
 	_facing = direction
+	global_position += direction * minf(_move_speed * delta, distance)
+	queue_redraw()
+
+
+func _move_toward_position(destination: Vector2, delta: float) -> void:
+	var offset := destination - global_position
+	var distance := offset.length()
+	if distance <= ARRIVAL_DISTANCE:
+		return
+
+	var direction := offset / distance
 	global_position += direction * minf(_move_speed * delta, distance)
 	queue_redraw()
 
@@ -274,6 +392,14 @@ func _try_melee_attack() -> void:
 		return
 
 	attack_ship.emit(_attack_damage)
+	_attack_timer = _attack_interval
+
+
+func _try_melee_player_attack() -> void:
+	if _attack_timer > 0.0:
+		return
+
+	attack_player.emit(_attack_damage)
 	_attack_timer = _attack_interval
 
 
@@ -301,6 +427,7 @@ func _die() -> void:
 		return
 
 	_alive = false
+	clear_player_target()
 	set_physics_process(false)
 	set_process(false)
 	defeated.emit(self, _reward)

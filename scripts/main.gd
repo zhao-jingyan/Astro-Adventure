@@ -1,6 +1,6 @@
 extends Node2D
 
-## 单局主流程：驾驶、采集、建造、波次战斗与胜负结算。
+## 单局主流程：异星地表探索、风险采集、基地布防与撤退求生。
 
 enum GamePhase {
 	PREPARATION,
@@ -9,25 +9,36 @@ enum GamePhase {
 	DEFEAT,
 }
 
-const WORLD_SIZE := Vector2(1280.0, 720.0)
-const SHIP_POSITION := Vector2(640.0, 366.0)
-const SAFE_RADIUS := 132.0
+const WORLD_SIZE := Vector2(7680.0, 5120.0)
+const SHIP_POSITION := WORLD_SIZE * 0.5
+const PLANET_NAME := "KHEPRI-9 · 烬砂荒原"
+const SAFE_RADIUS := 156.0
 const SHIP_COLLISION_RADIUS := 48.0
 const TURRET_MOUNT_RADIUS := 94.0
 const TURRET_BUILD_COST := 14
 const REPAIR_COST := 4
 const REPAIR_AMOUNT := 24.0
 const TOTAL_WAVES := 5
-const INITIAL_PREP_TIME := 14.0
-const LATER_PREP_TIME := 9.0
-const CRYSTAL_COUNT := 9
+const INITIAL_PREP_TIME := 24.0
+const LATER_PREP_TIME := 38.0
+const LOCAL_CRYSTAL_COUNT := 18
+const REMOTE_CRYSTAL_COUNT := 18
+const DEEP_CRYSTAL_COUNT := 10
+const AMBIENT_CREATURE_COUNT := 16
+const PLAYER_BASE_SPEED := 330.0
+const PLAYER_SPRINT_MULTIPLIER := 1.58
+const STAMINA_MAX := 100.0
+const SPRINT_STAMINA_DRAIN := 30.0
+const STAMINA_RECOVERY := 19.0
+const STAMINA_RECOVERY_DELAY := 0.55
+const PULSE_RADIUS := 172.0
+const PULSE_COST := 26.0
+const PULSE_COOLDOWN := 3.4
 
-const COLOR_BG := Color("#060b16")
 const COLOR_PANEL := Color("#0d1a2c")
-const COLOR_GRID := Color("#14263a")
 const COLOR_CYAN := Color("#68e0d0")
 const COLOR_ICE := Color("#d9f7f3")
-const COLOR_AMBER := Color("#f2be5c")
+const COLOR_AMBER := Color("#f0b45f")
 const COLOR_RED := Color("#ff6f68")
 const COLOR_VIOLET := Color("#a78bfa")
 
@@ -36,15 +47,15 @@ const INPUT_KEYS := {
 	"move_right": [KEY_D, KEY_RIGHT],
 	"move_up": [KEY_W, KEY_UP],
 	"move_down": [KEY_S, KEY_DOWN],
-	"fire": [KEY_SPACE],
+	"sprint": [KEY_SHIFT],
+	"pulse": [KEY_SPACE],
 	"interact": [KEY_E],
 	"start_wave": [KEY_ENTER],
 	"restart": [KEY_R],
 	"toggle_pause": [KEY_ESCAPE],
 }
 
-@export var player_speed: float = 260.0
-@export var player_fire_interval: float = 0.17
+@export var player_speed: float = PLAYER_BASE_SPEED
 
 var phase: GamePhase = GamePhase.PREPARATION
 var wave := 1
@@ -53,32 +64,38 @@ var elapsed_time := 0.0
 var ship_hull := 240.0
 var ship_hull_max := 240.0
 var resources := 8
+var deep_cores := 0
 var score := 0
 
-var player_position := Vector2(772.0, 366.0)
+var player_position := SHIP_POSITION + Vector2(128.0, 0.0)
 var player_health := 100.0
 var player_health_max := 100.0
 var player_alive := true
 var player_invulnerability := 0.0
 var respawn_timer := 0.0
-var player_fire_cooldown := 0.0
-var aim_direction := Vector2.RIGHT
 var last_move_direction := Vector2.RIGHT
 var walk_phase := 0.0
+var stamina := STAMINA_MAX
+var stamina_recovery_delay := 0.0
+var sprinting := false
+var pulse_cooldown := 0.0
+var pulse_visual := 0.0
 
 var enemies: Array[Enemy] = []
 var turrets: Array = [null, null, null, null]
 var projectiles: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
 var crystals: Array[Dictionary] = []
-var stars: Array[Dictionary] = []
-var asteroids: Array[Dictionary] = []
 var spawn_queue: Array[int] = []
 var spawn_timer := 0.0
+var ambient_respawn_timer := 62.0
 var is_paused := false
 var rng := RandomNumberGenerator.new()
 var hud: GameHUD
 var audio: GameAudio
+var camera: Camera2D
+var player_marker: Node2D
+var planet_surface: PlanetSurface
 
 
 func _ready() -> void:
@@ -87,8 +104,9 @@ func _ready() -> void:
 	_ensure_input_actions()
 	_setup_audio()
 	_setup_hud()
-	_generate_environment()
+	_setup_world()
 	_spawn_initial_crystals()
+	_spawn_ambient_creatures()
 	_start_preparation(1)
 	queue_redraw()
 
@@ -115,6 +133,7 @@ func _process(delta: float) -> void:
 	_update_projectiles(delta)
 	_update_collectibles(delta)
 	_update_particles(delta)
+	_update_ambient_life(delta)
 	_refresh_hud()
 	queue_redraw()
 
@@ -150,51 +169,71 @@ func _setup_audio() -> void:
 	add_child(audio)
 
 
-func _generate_environment() -> void:
-	stars.clear()
-	for index in range(120):
-		stars.append({
-			"position": Vector2(rng.randf_range(0.0, WORLD_SIZE.x), rng.randf_range(0.0, WORLD_SIZE.y)),
-			"radius": rng.randf_range(0.6, 2.1),
-			"alpha": rng.randf_range(0.22, 0.9),
-			"phase": rng.randf_range(0.0, TAU),
-		})
+func _setup_world() -> void:
+	planet_surface = PlanetSurface.new()
+	planet_surface.name = "Khepri9Surface"
+	planet_surface.z_index = -20
+	planet_surface.configure(WORLD_SIZE, SHIP_POSITION, rng.randi_range(1, 999999))
+	add_child(planet_surface)
 
-	asteroids.clear()
-	for index in range(16):
-		var angle := rng.randf_range(0.0, TAU)
-		var distance := rng.randf_range(210.0, 560.0)
-		var asteroid_position := SHIP_POSITION + Vector2.from_angle(angle) * distance
-		asteroid_position.x = clampf(asteroid_position.x, 35.0, WORLD_SIZE.x - 35.0)
-		asteroid_position.y = clampf(asteroid_position.y, 35.0, WORLD_SIZE.y - 35.0)
-		asteroids.append({
-			"position": asteroid_position,
-			"radius": rng.randf_range(5.0, 17.0),
-			"rotation": rng.randf_range(0.0, TAU),
-		})
+	player_marker = Node2D.new()
+	player_marker.name = "PlayerTarget"
+	player_marker.position = player_position
+	player_marker.z_index = -1
+	add_child(player_marker)
+
+	camera = Camera2D.new()
+	camera.name = "FollowCamera"
+	camera.position = player_position
+	camera.enabled = true
+	camera.position_smoothing_enabled = true
+	camera.position_smoothing_speed = 7.0
+	camera.limit_left = 0
+	camera.limit_top = 0
+	camera.limit_right = int(WORLD_SIZE.x)
+	camera.limit_bottom = int(WORLD_SIZE.y)
+	add_child(camera)
+	camera.make_current()
 
 
 func _spawn_initial_crystals() -> void:
 	crystals.clear()
-	for index in range(CRYSTAL_COUNT):
-		crystals.append(_create_crystal())
+	for index in range(LOCAL_CRYSTAL_COUNT):
+		crystals.append(_create_crystal("common", 360.0, 1180.0))
+	for index in range(REMOTE_CRYSTAL_COUNT):
+		crystals.append(_create_crystal("common", 1450.0, 3150.0))
+	for index in range(DEEP_CRYSTAL_COUNT):
+		crystals.append(_create_crystal("deep", 2450.0, 3420.0))
 
 
-func _create_crystal() -> Dictionary:
+func _create_crystal(kind: String, min_distance: float, max_distance: float) -> Dictionary:
 	var crystal_position := Vector2.ZERO
+	var clearance := 30.0 if kind == "deep" else 20.0
 	for attempt in range(30):
-		crystal_position = Vector2(
-			rng.randf_range(90.0, WORLD_SIZE.x - 90.0),
-			rng.randf_range(110.0, WORLD_SIZE.y - 60.0)
-		)
-		if crystal_position.distance_to(SHIP_POSITION) > SAFE_RADIUS + 78.0:
+		crystal_position = SHIP_POSITION + Vector2.from_angle(
+			rng.randf_range(0.0, TAU)
+		) * rng.randf_range(min_distance, max_distance)
+		crystal_position.x = clampf(crystal_position.x, 80.0, WORLD_SIZE.x - 80.0)
+		crystal_position.y = clampf(crystal_position.y, 80.0, WORLD_SIZE.y - 80.0)
+		if (
+			crystal_position.distance_to(SHIP_POSITION) >= min_distance
+			and planet_surface.get_spawn_clearance(crystal_position, clearance)
+		):
 			break
 
-	return {
+	var crystal := {
 		"position": crystal_position,
-		"value": rng.randi_range(3, 5),
+		"kind": kind,
+		"value": rng.randi_range(4, 7),
+		"core_amount": 0,
 		"phase": rng.randf_range(0.0, TAU),
 	}
+	if kind == "deep":
+		crystal["value"] = rng.randi_range(12, 18)
+		crystal["core_amount"] = 1
+	elif min_distance >= 1400.0:
+		crystal["value"] = rng.randi_range(7, 11)
+	return crystal
 
 
 func _start_preparation(next_wave: int) -> void:
@@ -225,7 +264,7 @@ func _begin_combat() -> void:
 			kind = Enemy.EnemyKind.BRUISER
 		spawn_queue.append(kind)
 
-	hud.show_notice("敌潮进入航道 · 守住回声号", COLOR_RED, 2.2)
+	hud.show_notice("地鸣逼近营地 · 回声号进入警戒", COLOR_RED, 2.2)
 	if audio:
 		audio.play_wave()
 
@@ -247,7 +286,7 @@ func _update_wave_logic(delta: float) -> void:
 		if spawn_timer <= 0.0:
 			_spawn_enemy()
 			spawn_timer = maxf(0.25, 0.82 - wave * 0.07)
-	elif enemies.is_empty():
+	elif _wave_enemy_count() == 0:
 		_complete_wave()
 
 
@@ -256,17 +295,9 @@ func _spawn_enemy() -> void:
 		return
 
 	var kind: int = spawn_queue.pop_front()
-	var side := rng.randi_range(0, 3)
-	var spawn_position := Vector2.ZERO
-	match side:
-		0:
-			spawn_position = Vector2(-28.0, rng.randf_range(90.0, WORLD_SIZE.y - 50.0))
-		1:
-			spawn_position = Vector2(WORLD_SIZE.x + 28.0, rng.randf_range(70.0, WORLD_SIZE.y - 50.0))
-		2:
-			spawn_position = Vector2(rng.randf_range(80.0, WORLD_SIZE.x - 80.0), -28.0)
-		_:
-			spawn_position = Vector2(rng.randf_range(80.0, WORLD_SIZE.x - 80.0), WORLD_SIZE.y + 28.0)
+	var spawn_position := SHIP_POSITION + Vector2.from_angle(
+		rng.randf_range(0.0, TAU)
+	) * rng.randf_range(760.0, 980.0)
 
 	var enemy := Enemy.new()
 	enemy.position = spawn_position
@@ -274,9 +305,85 @@ func _spawn_enemy() -> void:
 	enemy.configure(kind, spawn_position, SHIP_POSITION, 1.0 + (wave - 1) * 0.14)
 	add_child(enemy)
 	enemies.append(enemy)
+	enemy.set_meta(&"wave_enemy", true)
+	enemy.set_meta(&"home_position", spawn_position)
 	enemy.attack_ship.connect(_on_enemy_attack_ship)
+	enemy.attack_player.connect(_on_enemy_attack_player)
 	enemy.projectile_requested.connect(_on_enemy_projectile_requested)
 	enemy.defeated.connect(_on_enemy_defeated)
+	enemy.set_player_target(player_marker, 440.0, 1040.0)
+
+
+func _spawn_ambient_creatures() -> void:
+	for index in range(AMBIENT_CREATURE_COUNT):
+		_spawn_ambient_creature(index)
+
+
+func _spawn_ambient_creature(index: int) -> void:
+	var kind: int = Enemy.EnemyKind.SCOUT
+	if index % 5 == 4:
+		kind = Enemy.EnemyKind.BRUISER
+	elif index % 4 == 3:
+		kind = Enemy.EnemyKind.SPITTER
+
+	var spawn_position := _get_danger_spawn_position()
+
+	var enemy := Enemy.new()
+	enemy.position = spawn_position
+	enemy.z_index = 4
+	enemy.configure(kind, spawn_position, spawn_position, 1.0 + rng.randf_range(0.0, 0.22))
+	add_child(enemy)
+	enemies.append(enemy)
+	enemy.set_meta(&"wave_enemy", false)
+	enemy.set_meta(&"home_position", spawn_position)
+	enemy.attack_player.connect(_on_enemy_attack_player)
+	enemy.projectile_requested.connect(_on_ambient_projectile_requested.bind(enemy))
+	enemy.defeated.connect(_on_enemy_defeated)
+	enemy.set_player_target(player_marker, 520.0, 1180.0)
+
+
+func _get_danger_spawn_position() -> Vector2:
+	var anchors: Array[Dictionary] = []
+	for crystal: Dictionary in crystals:
+		if Vector2(crystal["position"]).distance_to(SHIP_POSITION) >= 1400.0:
+			anchors.append(crystal)
+
+	if anchors.is_empty():
+		return SHIP_POSITION + Vector2.from_angle(rng.randf_range(0.0, TAU)) * 2200.0
+
+	var anchor: Dictionary = anchors[rng.randi_range(0, anchors.size() - 1)]
+	var anchor_position: Vector2 = anchor["position"]
+	for attempt in range(20):
+		var candidate := anchor_position + Vector2.from_angle(
+			rng.randf_range(0.0, TAU)
+		) * rng.randf_range(120.0, 290.0)
+		candidate.x = clampf(candidate.x, 90.0, WORLD_SIZE.x - 90.0)
+		candidate.y = clampf(candidate.y, 90.0, WORLD_SIZE.y - 90.0)
+		if (
+			candidate.distance_to(SHIP_POSITION) >= 1280.0
+			and planet_surface.get_spawn_clearance(candidate, 24.0)
+		):
+			return candidate
+	var fallback := anchor_position + Vector2(80.0, 80.0)
+	fallback.x = clampf(fallback.x, 90.0, WORLD_SIZE.x - 90.0)
+	fallback.y = clampf(fallback.y, 90.0, WORLD_SIZE.y - 90.0)
+	return fallback
+
+
+func _wave_enemy_count() -> int:
+	var count := 0
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy) and enemy.get_meta(&"wave_enemy", false):
+			count += 1
+	return count
+
+
+func _ambient_enemy_count() -> int:
+	var count := 0
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy) and not enemy.get_meta(&"wave_enemy", false):
+			count += 1
+	return count
 
 
 func _complete_wave() -> void:
@@ -327,6 +434,8 @@ func _set_paused(paused_state: bool) -> void:
 
 func _update_player(delta: float) -> void:
 	player_invulnerability = maxf(0.0, player_invulnerability - delta)
+	pulse_cooldown = maxf(0.0, pulse_cooldown - delta)
+	pulse_visual = maxf(0.0, pulse_visual - delta * 2.5)
 
 	if not player_alive:
 		respawn_timer -= delta
@@ -334,19 +443,41 @@ func _update_player(delta: float) -> void:
 			player_alive = true
 			player_health = player_health_max
 			player_position = SHIP_POSITION + Vector2(104.0, 0.0)
+			player_marker.position = player_position
+			player_marker.set_meta(&"alive", true)
+			for enemy: Enemy in enemies:
+				if is_instance_valid(enemy):
+					enemy.set_hunting_enabled(true)
+			camera.position = player_position
+			camera.reset_smoothing()
 			player_invulnerability = 2.0
-			hud.show_notice("跃迁完成 · 驾驶员已返回航道", COLOR_CYAN, 1.6)
+			hud.show_notice("信标重构完成 · 驾驶员已返回营地", COLOR_CYAN, 1.6)
 		return
 
 	var direction := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	var moving := not direction.is_zero_approx()
+	sprinting = moving and Input.is_action_pressed("sprint") and stamina > 0.0
+
+	if sprinting:
+		stamina = maxf(0.0, stamina - SPRINT_STAMINA_DRAIN * delta)
+		stamina_recovery_delay = STAMINA_RECOVERY_DELAY
+	else:
+		stamina_recovery_delay = maxf(0.0, stamina_recovery_delay - delta)
+		if stamina_recovery_delay <= 0.0:
+			stamina = minf(STAMINA_MAX, stamina + STAMINA_RECOVERY * delta)
+
 	if not direction.is_zero_approx():
 		last_move_direction = direction.normalized()
-		player_position += direction.normalized() * player_speed * delta
+		var speed_multiplier := PLAYER_SPRINT_MULTIPLIER if sprinting else 1.0
+		player_position += direction.normalized() * player_speed * speed_multiplier * delta
 		walk_phase += delta * 9.0
 		player_position = player_position.clamp(
-			Vector2(22.0, 22.0),
-			WORLD_SIZE - Vector2(22.0, 22.0)
+			Vector2(48.0, 48.0),
+			WORLD_SIZE - Vector2(48.0, 48.0)
 		)
+
+	player_marker.position = player_position
+	camera.position = player_position
 
 	if (
 		player_position.distance_to(SHIP_POSITION) <= SAFE_RADIUS
@@ -354,49 +485,35 @@ func _update_player(delta: float) -> void:
 	):
 		player_health = minf(player_health_max, player_health + 10.0 * delta)
 
-	player_fire_cooldown = maxf(0.0, player_fire_cooldown - delta)
 	if Input.is_action_just_pressed("interact"):
 		_try_interact()
+	if Input.is_action_just_pressed("pulse"):
+		_perform_emergency_pulse()
 
-	var firing := Input.is_action_pressed("fire") or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-	if not firing:
+
+func _perform_emergency_pulse() -> void:
+	if pulse_cooldown > 0.0 or stamina < PULSE_COST:
 		return
 
-	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		var mouse_direction := get_global_mouse_position() - player_position
-		if mouse_direction.length_squared() > 16.0:
-			aim_direction = mouse_direction.normalized()
-	else:
-		var target := _nearest_enemy(player_position)
-		if target:
-			aim_direction = (target.global_position - player_position).normalized()
-		elif not direction.is_zero_approx():
-			aim_direction = direction.normalized()
-
-	if player_fire_cooldown <= 0.0:
-		_fire_player_weapon()
-		player_fire_cooldown = player_fire_interval
-
-
-func _fire_player_weapon() -> void:
-	var origin := player_position + aim_direction * 17.0
-	_add_projectile(origin, aim_direction, 18.0, 760.0, COLOR_CYAN, false, null)
-	_add_particles(origin, COLOR_CYAN, 3, 55.0, aim_direction, 2.0)
-	if audio:
-		audio.play_shoot()
-
-
-func _nearest_enemy(from_position: Vector2) -> Enemy:
-	var nearest: Enemy = null
-	var nearest_distance := INF
+	stamina -= PULSE_COST
+	stamina_recovery_delay = STAMINA_RECOVERY_DELAY
+	pulse_cooldown = PULSE_COOLDOWN
+	pulse_visual = 1.0
 	for enemy: Enemy in enemies:
 		if not is_instance_valid(enemy) or not enemy.is_alive():
 			continue
-		var distance := from_position.distance_squared_to(enemy.global_position)
-		if distance < nearest_distance:
-			nearest = enemy
-			nearest_distance = distance
-	return nearest
+		var offset := enemy.global_position - player_position
+		if offset.length() > PULSE_RADIUS:
+			continue
+		var repel_direction := offset.normalized()
+		if repel_direction.is_zero_approx():
+			repel_direction = Vector2.from_angle(rng.randf_range(0.0, TAU))
+		enemy.receive_damage(0.0, repel_direction * 470.0)
+		_add_explosion(enemy.global_position, COLOR_CYAN, 4, 55.0)
+
+	_add_explosion(player_position, COLOR_CYAN, 18, 145.0)
+	if audio:
+		audio.play_shoot()
 
 
 func _update_turrets(delta: float) -> void:
@@ -426,12 +543,16 @@ func _try_interact() -> void:
 			return
 
 		var upgrade_cost: int = turret.get_upgrade_cost()
+		var core_cost := 1 if turret.get_level() == 2 else 0
 		if turret.get_level() >= 3:
 			hud.show_notice("炮台 #%d 已达到最高等级" % (slot_index + 1), COLOR_ICE, 1.5)
 		elif resources < upgrade_cost:
 			hud.show_notice("升级需要 %d 单位资源" % upgrade_cost, COLOR_RED, 1.8)
+		elif deep_cores < core_cost:
+			hud.show_notice("三级炮台需要 1 枚深核晶体，前往荒原远端搜寻", COLOR_RED, 2.2)
 		elif turret.upgrade():
 			resources -= upgrade_cost
+			deep_cores -= core_cost
 			score += 25
 			_add_explosion(turret.global_position, COLOR_AMBER, 8, 65.0)
 			hud.show_notice("炮台 #%d 升级至 %d 级" % [slot_index + 1, turret.get_level()], COLOR_AMBER, 1.5)
@@ -499,6 +620,10 @@ func _on_enemy_attack_ship(damage: float) -> void:
 	_damage_ship(damage)
 
 
+func _on_enemy_attack_player(damage: float) -> void:
+	_damage_player(damage)
+
+
 func _on_enemy_projectile_requested(
 	origin: Vector2,
 	direction: Vector2,
@@ -509,6 +634,19 @@ func _on_enemy_projectile_requested(
 	_add_projectile(origin, direction, damage, speed, color, true, null)
 	if audio:
 		audio.play_enemy_shot()
+
+
+func _on_ambient_projectile_requested(
+	origin: Vector2,
+	direction: Vector2,
+	damage: float,
+	speed: float,
+	color: Color,
+	enemy: Enemy
+) -> void:
+	if not is_instance_valid(enemy) or not enemy.is_hunting_player():
+		return
+	_on_enemy_projectile_requested(origin, direction, damage, speed, color)
 
 
 func _on_enemy_defeated(enemy: Node, reward: int) -> void:
@@ -551,7 +689,13 @@ func _damage_player(damage: float) -> void:
 	player_alive = false
 	respawn_timer = 2.5
 	resources = maxi(0, resources - 3)
-	hud.show_notice("驾驶员失联 · 正在重构跃迁信标", COLOR_RED, 2.0)
+	player_marker.position = SHIP_POSITION
+	player_marker.set_meta(&"alive", false)
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy):
+			enemy.set_hunting_enabled(false)
+	camera.position = SHIP_POSITION
+	hud.show_notice("驾驶员失联 · 营地在回收跃迁信标", COLOR_RED, 2.0)
 
 
 func _add_projectile(
@@ -678,11 +822,36 @@ func _update_particles(delta: float) -> void:
 func _update_collectibles(_delta: float) -> void:
 	for index in range(crystals.size() - 1, -1, -1):
 		var crystal: Dictionary = crystals[index]
-		if player_position.distance_to(crystal["position"]) <= 29.0:
+		if player_position.distance_to(crystal["position"]) <= 34.0:
 			resources += int(crystal["value"])
-			score += 5
-			_add_explosion(crystal["position"], COLOR_VIOLET, 9, 75.0)
-			crystals[index] = _create_crystal()
+			var core_amount := int(crystal["core_amount"])
+			deep_cores += core_amount
+			score += 5 if core_amount == 0 else 55
+			var crystal_color := COLOR_VIOLET if core_amount > 0 else COLOR_CYAN
+			_add_explosion(crystal["position"], crystal_color, 12 if core_amount > 0 else 8, 90.0)
+			if core_amount > 0:
+				hud.show_notice("获得深核晶体 · 可升级三级炮台", COLOR_VIOLET, 2.2)
+				if audio:
+					audio.play_upgrade()
+			crystals[index] = _respawn_crystal(str(crystal["kind"]))
+
+
+func _respawn_crystal(kind: String) -> Dictionary:
+	if kind == "deep":
+		return _create_crystal("deep", 2450.0, 3420.0)
+	var current_distance := player_position.distance_to(SHIP_POSITION)
+	if current_distance > 1300.0:
+		return _create_crystal("common", 1450.0, 3150.0)
+	return _create_crystal("common", 360.0, 1180.0)
+
+
+func _update_ambient_life(delta: float) -> void:
+	ambient_respawn_timer -= delta
+	if ambient_respawn_timer > 0.0:
+		return
+	ambient_respawn_timer = 58.0
+	if _ambient_enemy_count() < AMBIENT_CREATURE_COUNT + 6:
+		_spawn_ambient_creature(rng.randi_range(0, 999))
 
 
 func _refresh_hud() -> void:
@@ -691,7 +860,8 @@ func _refresh_hud() -> void:
 	hud.update_state({
 		"ship_hull": ship_hull,
 		"ship_hull_max": ship_hull_max,
-		"resources": resources,
+		"resources": {"晶尘": resources, "深核": deep_cores},
+		"planet_name": PLANET_NAME,
 		"wave": wave,
 		"total_waves": TOTAL_WAVES,
 		"wave_state": _get_wave_state_text(),
@@ -699,6 +869,9 @@ func _refresh_hud() -> void:
 		"player_alive": player_alive,
 		"player_health": player_health,
 		"player_health_max": player_health_max,
+		"stamina": stamina,
+		"stamina_max": STAMINA_MAX,
+		"pulse_cooldown": pulse_cooldown,
 		"nearby_action": _get_context_prompt(),
 		"build_prompt": "",
 		"enemy_count": enemies.size(),
@@ -706,7 +879,31 @@ func _refresh_hud() -> void:
 		"score": score,
 		"elapsed": elapsed_time,
 		"phase": _get_phase_name(),
+		"world_size": WORLD_SIZE,
+		"base_position": SHIP_POSITION,
+		"player_position": player_position,
+		"camera_position": camera.get_screen_center_position() if camera else player_position,
+		"resource_marks": _resource_marks(),
+		"enemy_marks": _enemy_marks(),
 	})
+
+
+func _resource_marks() -> Array[Dictionary]:
+	var marks: Array[Dictionary] = []
+	for crystal: Dictionary in crystals:
+		marks.append({
+			"position": crystal["position"],
+			"kind": crystal["kind"],
+		})
+	return marks
+
+
+func _enemy_marks() -> Array[Dictionary]:
+	var marks: Array[Dictionary] = []
+	for enemy: Enemy in enemies:
+		if is_instance_valid(enemy) and enemy.is_alive():
+			marks.append({"position": enemy.global_position})
+	return marks
 
 
 func _get_phase_name() -> String:
@@ -726,12 +923,12 @@ func _get_phase_name() -> String:
 
 func _get_wave_state_text() -> String:
 	if phase == GamePhase.PREPARATION:
-		return "布防阶段"
+		return "远征窗口"
 	if phase == GamePhase.COMBAT:
-		return "航道交战中"
+		return "营地遭袭"
 	if phase == GamePhase.VICTORY:
-		return "航道安全"
-	return "回声号失联"
+		return "荒原肃清"
+	return "营地失守"
 
 
 func _get_context_prompt() -> String:
@@ -744,16 +941,23 @@ func _get_context_prompt() -> String:
 	if slot_index >= 0:
 		var turret: Turret = turrets[slot_index]
 		if turret == null:
-			return "E  建造炮台 #%d  ·  %d 资源" % [slot_index + 1, TURRET_BUILD_COST]
+			return "E  建造炮台 #%d  ·  %d 晶尘" % [slot_index + 1, TURRET_BUILD_COST]
 		if turret.get_level() >= 3:
 			return "炮台 #%d 已达到三级" % (slot_index + 1)
-		return "E  升级炮台 #%d  ·  %d 资源" % [slot_index + 1, turret.get_upgrade_cost()]
+		var core_suffix := " + 1 深核" if turret.get_level() == 2 else ""
+		return "E  升级炮台 #%d  ·  %d 晶尘%s" % [
+			slot_index + 1,
+			turret.get_upgrade_cost(),
+			core_suffix,
+		]
 
 	if player_position.distance_to(SHIP_POSITION) <= SAFE_RADIUS:
 		if ship_hull < ship_hull_max:
-			return "E  修复船体 +%d  ·  %d 资源" % [int(REPAIR_AMOUNT), REPAIR_COST]
+			return "E  修复船体 +%d  ·  %d 晶尘" % [int(REPAIR_AMOUNT), REPAIR_COST]
 		return "回声号结构完整"
-	return "寻找紫晶，靠近自动回收"
+	if player_position.distance_to(SHIP_POSITION) > 2200.0:
+		return "深核矿区 · 怪物会主动追击，保持移动"
+	return "青色晶尘供基地使用，紫色深核位于荒原远端"
 
 
 func _turret_count() -> int:
@@ -765,7 +969,6 @@ func _turret_count() -> int:
 
 
 func _draw() -> void:
-	_draw_world_background()
 	_draw_crystals()
 	_draw_ship()
 	_draw_player()
@@ -773,59 +976,45 @@ func _draw() -> void:
 	_draw_particles()
 
 
-func _draw_world_background() -> void:
-	draw_rect(Rect2(Vector2.ZERO, WORLD_SIZE), COLOR_BG)
-	draw_circle(Vector2(197.0, 168.0), 290.0, Color(0.10, 0.25, 0.34, 0.18))
-	draw_circle(Vector2(1080.0, 620.0), 340.0, Color(0.26, 0.16, 0.37, 0.13))
-	draw_circle(Vector2(900.0, 90.0), 220.0, Color(0.07, 0.29, 0.31, 0.12))
-
-	for x in range(0, int(WORLD_SIZE.x) + 1, 64):
-		draw_line(Vector2(x, 0.0), Vector2(x, WORLD_SIZE.y), COLOR_GRID, 1.0)
-	for y in range(0, int(WORLD_SIZE.y) + 1, 64):
-		draw_line(Vector2(0.0, y), Vector2(WORLD_SIZE.x, y), COLOR_GRID, 1.0)
-
-	for star: Dictionary in stars:
-		var alpha: float = star["alpha"] * (0.7 + sin(elapsed_time * 1.8 + star["phase"]) * 0.3)
-		draw_circle(star["position"], star["radius"], Color(0.72, 0.88, 1.0, alpha))
-
-	for asteroid: Dictionary in asteroids:
-		var asteroid_position: Vector2 = asteroid["position"]
-		var asteroid_radius: float = asteroid["radius"]
-		draw_circle(asteroid_position, asteroid_radius + 4.0, Color(0.1, 0.18, 0.28, 0.25))
-		draw_circle(asteroid_position, asteroid_radius, Color("#172438"))
-		draw_arc(
-			asteroid_position,
-			asteroid_radius,
-			asteroid["rotation"],
-			asteroid["rotation"] + 2.1,
-			12,
-			Color("#2c4862"),
-			2.0
-		)
-
-	var border_color := Color(0.36, 0.78, 0.85, 0.25)
-	draw_rect(Rect2(Vector2(2.0, 2.0), WORLD_SIZE - Vector2(4.0, 4.0)), border_color, false, 2.0)
-
-
 func _draw_crystals() -> void:
 	for crystal: Dictionary in crystals:
 		var position: Vector2 = crystal["position"]
 		var bob := Vector2(0.0, sin(elapsed_time * 2.3 + crystal["phase"]) * 4.0)
 		var draw_position := position + bob
-		var pulse := 17.0 + sin(elapsed_time * 3.0 + crystal["phase"]) * 3.0
-		draw_circle(draw_position, pulse, Color(0.56, 0.38, 0.96, 0.09))
+		var is_deep: bool = crystal["kind"] == "deep"
+		var crystal_color := COLOR_VIOLET if is_deep else COLOR_CYAN
+		var crystal_size := 17.0 if is_deep else 10.0
+		var pulse := (1.0 if is_deep else 0.65) * (
+			17.0 + sin(elapsed_time * 3.0 + crystal["phase"]) * 4.0
+		)
+		draw_circle(draw_position, pulse, Color(crystal_color, 0.11))
+		if is_deep:
+			draw_arc(
+				draw_position,
+				31.0 + sin(elapsed_time * 1.8 + crystal["phase"]) * 4.0,
+				crystal["phase"],
+				crystal["phase"] + PI * 1.35,
+				24,
+				Color(crystal_color, 0.32),
+				2.0
+			)
 		draw_colored_polygon(PackedVector2Array([
-			draw_position + Vector2(0.0, -12.0),
-			draw_position + Vector2(8.0, 0.0),
-			draw_position + Vector2(0.0, 12.0),
-			draw_position + Vector2(-8.0, 0.0),
-		]), COLOR_VIOLET)
+			draw_position + Vector2(0.0, -crystal_size),
+			draw_position + Vector2(crystal_size * 0.66, 0.0),
+			draw_position + Vector2(0.0, crystal_size),
+			draw_position + Vector2(-crystal_size * 0.66, 0.0),
+		]), crystal_color)
 		draw_colored_polygon(PackedVector2Array([
-			draw_position + Vector2(0.0, -9.0),
-			draw_position + Vector2(3.0, 0.0),
-			draw_position + Vector2(0.0, 8.0),
-			draw_position + Vector2(-3.0, 0.0),
-		]), COLOR_ICE)
+			draw_position + Vector2(0.0, -crystal_size * 0.72),
+			draw_position + Vector2(crystal_size * 0.25, 0.0),
+			draw_position + Vector2(0.0, crystal_size * 0.68),
+			draw_position + Vector2(-crystal_size * 0.25, 0.0),
+		]), Color("#f4ffff"))
+		if is_deep:
+			for shard_index in range(5):
+				var shard_angle: float = float(crystal["phase"]) + TAU * float(shard_index) / 5.0
+				var shard_position := draw_position + Vector2.from_angle(shard_angle) * 22.0
+				draw_circle(shard_position, 3.0, Color(crystal_color, 0.82))
 
 
 func _draw_ship() -> void:
@@ -911,10 +1100,35 @@ func _draw_player() -> void:
 		9.0 + pulse * 3.0,
 		Color(0.34, 0.86, 0.79, 0.12)
 	)
+	if sprinting:
+		for trail_index in range(3):
+			var trail_position := player_position - last_move_direction * (20.0 + trail_index * 14.0)
+			draw_line(
+				trail_position - last_move_direction * 8.0,
+				trail_position,
+				Color(0.70, 0.88, 0.72, 0.22 - trail_index * 0.05),
+				2.0
+			)
 	draw_circle(player_position, 13.0, COLOR_CYAN)
 	draw_circle(player_position, 8.0, COLOR_ICE)
-	draw_line(player_position, player_position + aim_direction * 24.0, Color(0.68, 1.0, 0.94, 0.82), 4.0)
-	draw_circle(player_position + aim_direction * 22.0, 3.0, COLOR_ICE)
+	draw_line(
+		player_position,
+		player_position + last_move_direction * 17.0,
+		Color(0.68, 1.0, 0.94, 0.82),
+		3.0
+	)
+
+	if pulse_visual > 0.0:
+		var pulse_progress := 1.0 - pulse_visual
+		draw_arc(
+			player_position,
+			24.0 + (PULSE_RADIUS - 24.0) * pulse_progress,
+			0.0,
+			TAU,
+			64,
+			Color(0.52, 1.0, 0.88, pulse_visual * 0.7),
+			4.0 * pulse_visual + 1.0
+		)
 
 	if player_health < player_health_max:
 		var health_ratio := clampf(player_health / player_health_max, 0.0, 1.0)

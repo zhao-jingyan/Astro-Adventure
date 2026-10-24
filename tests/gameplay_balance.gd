@@ -3,7 +3,7 @@ extends SceneTree
 ## 数值回归：模拟玩家建满三级炮台但不参与射击时的五波防守。
 
 const SIMULATION_STEP := 1.0 / 60.0
-const MAX_SIMULATION_SECONDS := 240.0
+const MAX_SIMULATION_SECONDS := 360.0
 
 
 func _init() -> void:

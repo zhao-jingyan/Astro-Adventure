@@ -4,6 +4,13 @@ extends Control
 ## 战斗 HUD：全部内容均由原生绘制 API 生成，不依赖额外字体、图片或场景。
 
 const DESIGN_SIZE := Vector2(1280.0, 720.0)
+const DEFAULT_PLANET_NAME := "KHEPRI-9 · 烬砂荒原"
+const DEFAULT_INPUT_HINTS := [
+	"WASD / 方向键   移动",
+	"Shift   冲刺",
+	"Space   应急脉冲",
+	"E   建造 / 升级 / 修复",
+]
 
 const COLOR_PANEL := Color(0.025, 0.055, 0.095, 0.88)
 const COLOR_PANEL_DARK := Color(0.012, 0.028, 0.052, 0.94)
@@ -177,7 +184,9 @@ func _draw() -> void:
 	_draw_screen_shading()
 	_draw_top_panels(font)
 	_draw_control_panel(font)
+	_draw_radar_panel(font)
 	_draw_status_panel(font)
+	_draw_survival_panel(font)
 	_draw_timer_banner(font)
 
 	if not _state_bool("player_alive", true):
@@ -212,6 +221,7 @@ func _draw_top_panels(font: Font) -> void:
 	var pad := 28.0 * s
 	var panel_y := 18.0 * s
 	var panel_height := 94.0 * s
+	var wave_panel_height := panel_height + 18.0 * s
 	var left_width := minf(390.0 * s, size.x * 0.29)
 	var center_width := minf(276.0 * s, size.x * 0.225)
 	var right_width := minf(360.0 * s, size.x * 0.27)
@@ -221,7 +231,7 @@ func _draw_top_panels(font: Font) -> void:
 		(size.x - center_width) * 0.5,
 		panel_y,
 		center_width,
-		panel_height
+		wave_panel_height
 	)
 	var resource_rect := Rect2(
 		size.x - pad - right_width,
@@ -336,11 +346,33 @@ func _draw_wave_panel(font: Font, rect: Rect2) -> void:
 		HORIZONTAL_ALIGNMENT_CENTER
 	)
 
+	draw_line(
+		Vector2(rect.position.x + 16.0 * s, rect.position.y + 80.0 * s),
+		Vector2(rect.end.x - 16.0 * s, rect.position.y + 80.0 * s),
+		_with_alpha(COLOR_BORDER, 0.55),
+		maxf(1.0, s)
+	)
+	var planet_name := _state_text("planet_name", DEFAULT_PLANET_NAME).strip_edges()
+	if planet_name.is_empty():
+		planet_name = DEFAULT_PLANET_NAME
+	_draw_text(
+		font,
+		Vector2(rect.position.x + 14.0 * s, rect.position.y + 84.0 * s),
+		planet_name,
+		maxi(10, roundi(12.0 * s)),
+		COLOR_CYAN,
+		inner_width,
+		HORIZONTAL_ALIGNMENT_CENTER
+	)
+
 
 func _draw_resource_panel(font: Font, rect: Rect2) -> void:
 	var s := _ui_scale
 	var inner_x := rect.position.x + 18.0 * s
 	var inner_width := rect.size.x - 36.0 * s
+	var primary_resource := _get_resource_display(_state.get("resources", 0), true)
+	var deep_core := _get_resource_display(_state.get("resources", 0), false)
+	var column_width := inner_width * 0.5
 
 	_draw_text(
 		font,
@@ -350,13 +382,39 @@ func _draw_resource_panel(font: Font, rect: Rect2) -> void:
 		COLOR_MUTED,
 		inner_width
 	)
+
+	# 两种资源并排显示，避免较长数字占用额外高度。
 	_draw_text(
 		font,
-		Vector2(inner_x, rect.position.y + 28.0 * s),
-		_format_resources(),
-		roundi(20.0 * s),
+		Vector2(inner_x, rect.position.y + 24.0 * s),
+		str(primary_resource["label"]),
+		maxi(10, roundi(11.0 * s)),
+		COLOR_MUTED,
+		column_width
+	)
+	_draw_text(
+		font,
+		Vector2(inner_x + column_width, rect.position.y + 24.0 * s),
+		str(deep_core["label"]),
+		maxi(10, roundi(11.0 * s)),
+		COLOR_MUTED,
+		column_width
+	)
+	_draw_text(
+		font,
+		Vector2(inner_x, rect.position.y + 38.0 * s),
+		_format_integer(int(primary_resource["amount"])),
+		maxi(13, roundi(20.0 * s)),
 		COLOR_AMBER,
-		inner_width
+		column_width
+	)
+	_draw_text(
+		font,
+		Vector2(inner_x + column_width, rect.position.y + 38.0 * s),
+		_format_integer(int(deep_core["amount"])),
+		maxi(13, roundi(20.0 * s)),
+		COLOR_CYAN,
+		column_width
 	)
 
 	var score := int(_state_number("score", 0.0))
@@ -378,8 +436,18 @@ func _draw_control_panel(font: Font) -> void:
 	var panel_width := minf(430.0 * s, size.x * 0.37)
 	var nearby_action := _state_text("nearby_action", "").strip_edges()
 	var build_prompt := _state_text("build_prompt", "").strip_edges()
-	var has_extra_line := not nearby_action.is_empty() and not build_prompt.is_empty()
-	var panel_height := (112.0 if has_extra_line else 92.0) * s
+	var hints := _get_input_hints()
+	var visible_hint_count := mini(hints.size(), 5)
+	var detail_lines: Array[String] = []
+	if not nearby_action.is_empty():
+		detail_lines.append(nearby_action)
+	if not build_prompt.is_empty() and build_prompt != nearby_action:
+		detail_lines.append(build_prompt)
+	if detail_lines.is_empty():
+		detail_lines.append("靠近设施后可建造、升级或修复")
+
+	var total_lines := maxi(1, visible_hint_count) + detail_lines.size()
+	var panel_height := (38.0 + 21.0 * float(total_lines) + 12.0) * s
 	var rect := Rect2(
 		pad,
 		size.y - pad - panel_height,
@@ -398,38 +466,290 @@ func _draw_control_panel(font: Font) -> void:
 		COLOR_CYAN,
 		inner_width
 	)
-	_draw_text(
-		font,
-		Vector2(inner_x, rect.position.y + 31.0 * s),
-		"WASD / 方向键   移动",
-		roundi(15.0 * s),
-		COLOR_TEXT,
-		inner_width
-	)
 
-	var interaction_text := nearby_action
-	if interaction_text.is_empty():
-		interaction_text = build_prompt
-	if interaction_text.is_empty():
-		interaction_text = "靠近设施可进行交互"
-	_draw_text(
-		font,
-		Vector2(inner_x, rect.position.y + 57.0 * s),
-		interaction_text,
-		roundi(13.0 * s),
-		COLOR_AMBER if not nearby_action.is_empty() or not build_prompt.is_empty() else COLOR_MUTED,
-		inner_width
-	)
-
-	if has_extra_line:
+	var line_y := rect.position.y + 30.0 * s
+	for index in range(visible_hint_count):
 		_draw_text(
 			font,
-			Vector2(inner_x, rect.position.y + 82.0 * s),
-			build_prompt,
-			roundi(12.0 * s),
-			COLOR_AMBER,
+			Vector2(inner_x, line_y),
+			hints[index],
+			maxi(10, roundi(14.0 * s)),
+			COLOR_TEXT if index == 0 else _with_alpha(COLOR_TEXT, 0.88),
 			inner_width
 		)
+		line_y += 21.0 * s
+
+	for index in range(detail_lines.size()):
+		_draw_text(
+			font,
+			Vector2(inner_x, line_y),
+			detail_lines[index],
+			maxi(9, roundi(12.0 * s)),
+			COLOR_AMBER if index == 0 and not nearby_action.is_empty() else COLOR_MUTED,
+			inner_width
+		)
+		line_y += 21.0 * s
+
+
+func _draw_radar_panel(font: Font) -> void:
+	var s := _ui_scale
+	var pad := 28.0 * s
+	var panel_width := minf(190.0 * s, size.x - pad * 2.0)
+	var panel_height := 140.0 * s
+	var status_height := 92.0 * s
+	var status_top := size.y - pad - status_height
+	var rect := Rect2(
+		size.x - pad - panel_width,
+		status_top - 12.0 * s - panel_height,
+		panel_width,
+		panel_height
+	)
+	_draw_panel(rect, COLOR_CYAN_DIM)
+
+	var inner_x := rect.position.x + 10.0 * s
+	var inner_width := rect.size.x - 20.0 * s
+	_draw_text(
+		font,
+		Vector2(inner_x, rect.position.y + 6.0 * s),
+		"区域雷达",
+		maxi(10, roundi(11.0 * s)),
+		COLOR_CYAN,
+		inner_width
+	)
+	_draw_text(
+		font,
+		Vector2(inner_x, rect.position.y + 7.0 * s),
+		"危险带",
+		maxi(9, roundi(9.0 * s)),
+		COLOR_DANGER,
+		inner_width,
+		HORIZONTAL_ALIGNMENT_RIGHT
+	)
+
+	var map_rect := Rect2(
+		inner_x,
+		rect.position.y + 24.0 * s,
+		inner_width,
+		rect.size.y - 34.0 * s
+	)
+	draw_rect(map_rect, _with_alpha(COLOR_PANEL_DARK, 0.96))
+	draw_rect(map_rect, _with_alpha(COLOR_BORDER, 0.55), false, maxf(1.0, s))
+
+	var world_size := _state_vector2("world_size", Vector2(1280.0, 720.0))
+	world_size = Vector2(maxf(1.0, world_size.x), maxf(1.0, world_size.y))
+	var inset := 5.0 * s
+	var available_size := Vector2(
+		maxf(1.0, map_rect.size.x - inset * 2.0),
+		maxf(1.0, map_rect.size.y - inset * 2.0)
+	)
+	var world_scale := minf(
+		available_size.x / world_size.x,
+		available_size.y / world_size.y
+	)
+	var mapped_size := world_size * world_scale
+	var world_rect := Rect2(
+		map_rect.get_center() - mapped_size * 0.5,
+		mapped_size
+	)
+
+	# 世界矩形、网格和边缘生态警示带共同构成全局态势底图。
+	draw_rect(world_rect, Color(0.025, 0.095, 0.105, 0.9))
+	_draw_radar_danger_bands(world_rect, s)
+	for index in range(1, 4):
+		var grid_x := world_rect.position.x + world_rect.size.x * float(index) / 4.0
+		draw_line(
+			Vector2(grid_x, world_rect.position.y),
+			Vector2(grid_x, world_rect.end.y),
+			Color(0.34, 0.74, 0.72, 0.15),
+			maxf(1.0, s * 0.65)
+		)
+	for index in range(1, 3):
+		var grid_y := world_rect.position.y + world_rect.size.y * float(index) / 3.0
+		draw_line(
+			Vector2(world_rect.position.x, grid_y),
+			Vector2(world_rect.end.x, grid_y),
+			Color(0.34, 0.74, 0.72, 0.15),
+			maxf(1.0, s * 0.65)
+		)
+	draw_rect(world_rect, _with_alpha(COLOR_CYAN_DIM, 0.72), false, maxf(1.0, s))
+
+	if _state.has("camera_position"):
+		var camera_value: Variant = _try_vector2(_state.get("camera_position"))
+		if camera_value != null:
+			var camera_center := _world_to_radar(
+				Vector2(camera_value),
+				world_size,
+				world_rect
+			)
+			var camera_rect := Rect2(
+				camera_center - Vector2(6.0, 4.0) * s,
+				Vector2(12.0, 8.0) * s
+			)
+			draw_rect(
+				camera_rect,
+				_with_alpha(COLOR_CYAN, 0.6),
+				false,
+				maxf(1.0, s)
+			)
+
+	if _state.has("base_position"):
+		var base_value: Variant = _try_vector2(_state.get("base_position"))
+		if base_value != null:
+			_draw_radar_base(
+				_world_to_radar(Vector2(base_value), world_size, world_rect),
+				s
+			)
+
+	_draw_radar_marks(
+		_state.get("resource_marks", []),
+		world_size,
+		world_rect,
+		false
+	)
+	_draw_radar_marks(
+		_state.get("enemy_marks", []),
+		world_size,
+		world_rect,
+		true
+	)
+
+	if _state_bool("player_alive", true):
+		var player_value: Variant = _try_vector2(_state.get("player_position"))
+		if player_value != null:
+			var player_center := _world_to_radar(
+				Vector2(player_value),
+				world_size,
+				world_rect
+			)
+			draw_circle(player_center, 3.4 * s, COLOR_TEXT)
+			draw_arc(
+				player_center,
+				6.0 * s,
+				0.0,
+				TAU,
+				18,
+				COLOR_CYAN,
+				maxf(1.0, 1.2 * s)
+			)
+
+
+func _draw_radar_danger_bands(world_rect: Rect2, s: float) -> void:
+	var band_height := clampf(world_rect.size.y * 0.11, 3.0 * s, 10.0 * s)
+	var top_band := Rect2(
+		world_rect.position,
+		Vector2(world_rect.size.x, band_height)
+	)
+	var bottom_band := Rect2(
+		Vector2(world_rect.position.x, world_rect.end.y - band_height),
+		Vector2(world_rect.size.x, band_height)
+	)
+	var danger_fill := Color(0.95, 0.24, 0.18, 0.13)
+	draw_rect(top_band, danger_fill)
+	draw_rect(bottom_band, danger_fill)
+
+	var hatch_step := maxf(7.0 * s, world_rect.size.x / 12.0)
+	var hatch_x := world_rect.position.x
+	while hatch_x <= world_rect.end.x:
+		draw_line(
+			Vector2(hatch_x, top_band.position.y),
+			Vector2(hatch_x - band_height * 0.7, top_band.end.y),
+			Color(COLOR_DANGER, 0.26),
+			maxf(1.0, s * 0.6)
+		)
+		hatch_x += hatch_step
+
+
+func _draw_radar_base(center: Vector2, s: float) -> void:
+	var radius := 4.5 * s
+	var points := PackedVector2Array([
+		center + Vector2(0.0, -radius),
+		center + Vector2(radius, 0.0),
+		center + Vector2(0.0, radius),
+		center + Vector2(-radius, 0.0),
+	])
+	draw_colored_polygon(points, COLOR_CYAN)
+	draw_arc(
+		center,
+		radius + 2.0 * s,
+		0.0,
+		TAU,
+		16,
+		_with_alpha(COLOR_CYAN, 0.5),
+		maxf(1.0, s)
+	)
+
+
+func _draw_radar_marks(
+	marks: Variant,
+	world_size: Vector2,
+	world_rect: Rect2,
+	is_enemy: bool
+) -> void:
+	var count := 0
+	match typeof(marks):
+		TYPE_ARRAY:
+			for mark: Variant in marks:
+				if count >= (48 if is_enemy else 64):
+					return
+				_draw_radar_mark(mark, world_size, world_rect, is_enemy)
+				count += 1
+		TYPE_PACKED_VECTOR2_ARRAY:
+			for mark: Vector2 in marks:
+				if count >= (48 if is_enemy else 64):
+					return
+				_draw_radar_mark(mark, world_size, world_rect, is_enemy)
+				count += 1
+
+
+func _draw_radar_mark(
+	mark: Variant,
+	world_size: Vector2,
+	world_rect: Rect2,
+	is_enemy: bool
+) -> void:
+	var position_value: Variant = _marker_position(mark)
+	if position_value == null:
+		return
+
+	var center := _world_to_radar(Vector2(position_value), world_size, world_rect)
+	if is_enemy:
+		var size_px := 3.4 * _ui_scale
+		draw_colored_polygon(
+			PackedVector2Array([
+				center + Vector2(0.0, -size_px),
+				center + Vector2(size_px, size_px),
+				center + Vector2(-size_px, size_px),
+			]),
+			COLOR_DANGER
+		)
+		return
+
+	var marker_color := COLOR_AMBER
+	var marker_radius := 2.7 * _ui_scale
+	if mark is Dictionary and str(mark.get("kind", "")) == "deep":
+		marker_color = Color("#a78bfa")
+		marker_radius = 3.6 * _ui_scale
+	draw_colored_polygon(
+		PackedVector2Array([
+			center + Vector2(0.0, -marker_radius),
+			center + Vector2(marker_radius, 0.0),
+			center + Vector2(0.0, marker_radius),
+			center + Vector2(-marker_radius, 0.0),
+		]),
+		marker_color
+	)
+
+
+func _world_to_radar(
+	world_position: Vector2,
+	world_size: Vector2,
+	world_rect: Rect2
+) -> Vector2:
+	var normalized := Vector2(
+		clampf(world_position.x / world_size.x, 0.0, 1.0),
+		clampf(world_position.y / world_size.y, 0.0, 1.0)
+	)
+	return world_rect.position + normalized * world_rect.size
 
 
 func _draw_status_panel(font: Font) -> void:
@@ -493,6 +813,76 @@ func _draw_status_panel(font: Font) -> void:
 	)
 
 
+func _draw_survival_panel(font: Font) -> void:
+	var s := _ui_scale
+	var pad := 28.0 * s
+	var control_width := minf(430.0 * s, size.x * 0.37)
+	var status_width := minf(460.0 * s, size.x * 0.40)
+	var available_width := size.x - pad * 2.0 - control_width - status_width - 24.0 * s
+	var panel_width := minf(310.0 * s, available_width)
+	if panel_width < 120.0 * s:
+		return
+
+	var panel_height := 64.0 * s
+	var rect := Rect2(
+		(size.x - panel_width) * 0.5,
+		size.y - pad - panel_height,
+		panel_width,
+		panel_height
+	)
+	_draw_panel(rect, COLOR_CYAN_DIM)
+
+	var inner_x := rect.position.x + 12.0 * s
+	var inner_width := rect.size.x - 24.0 * s
+	var health_max := maxf(1.0, _state_number("player_health_max", 100.0))
+	var health := clampf(_state_number("player_health", health_max), 0.0, health_max)
+	var stamina_max := maxf(1.0, _state_number("stamina_max", 100.0))
+	var stamina := clampf(_state_number("stamina", stamina_max), 0.0, stamina_max)
+	var pulse_cd := maxf(0.0, _state_number("pulse_cooldown", 0.0))
+
+	_draw_text(
+		font,
+		Vector2(inner_x, rect.position.y + 5.0 * s),
+		"驾驶员",
+		maxi(8, roundi(10.0 * s)),
+		COLOR_MUTED,
+		inner_width
+	)
+	_draw_text(
+		font,
+		Vector2(inner_x, rect.position.y + 5.0 * s),
+		"脉冲就绪" if pulse_cd <= 0.01 else "脉冲冷却 %.1fs" % pulse_cd,
+		maxi(8, roundi(10.0 * s)),
+		COLOR_CYAN if pulse_cd <= 0.01 else COLOR_AMBER,
+		inner_width,
+		HORIZONTAL_ALIGNMENT_RIGHT
+	)
+
+	var health_rect := Rect2(
+		inner_x,
+		rect.position.y + 23.0 * s,
+		inner_width,
+		7.0 * s
+	)
+	draw_rect(health_rect, COLOR_PANEL_DARK)
+	draw_rect(
+		Rect2(health_rect.position, Vector2(health_rect.size.x * health / health_max, health_rect.size.y)),
+		COLOR_DANGER if health / health_max < 0.35 else COLOR_AMBER
+	)
+
+	var stamina_rect := Rect2(
+		inner_x,
+		rect.position.y + 43.0 * s,
+		inner_width,
+		7.0 * s
+	)
+	draw_rect(stamina_rect, COLOR_PANEL_DARK)
+	draw_rect(
+		Rect2(stamina_rect.position, Vector2(stamina_rect.size.x * stamina / stamina_max, stamina_rect.size.y)),
+		COLOR_CYAN
+	)
+
+
 func _draw_timer_banner(font: Font) -> void:
 	if not _state.has("timer"):
 		return
@@ -506,7 +896,7 @@ func _draw_timer_banner(font: Font) -> void:
 	var banner_height := 38.0 * s
 	var rect := Rect2(
 		(size.x - banner_width) * 0.5,
-		124.0 * s,
+		142.0 * s,
 		banner_width,
 		banner_height
 	)
@@ -763,7 +1153,62 @@ func _fit_text(font: Font, text: String, font_size: int, max_width: float) -> St
 
 
 func _state_number(key: String, fallback: float) -> float:
-	var value: Variant = _state.get(key)
+	return _variant_number(_state.get(key), fallback)
+
+
+func _variant_number(value: Variant, fallback: float = 0.0) -> float:
+	match typeof(value):
+		TYPE_INT, TYPE_FLOAT:
+			return float(value)
+		TYPE_BOOL:
+			return 1.0 if bool(value) else 0.0
+		TYPE_STRING, TYPE_STRING_NAME:
+			var text := str(value).strip_edges()
+			if text.is_valid_float():
+				return text.to_float()
+	return fallback
+
+
+func _state_vector2(key: String, fallback: Vector2) -> Vector2:
+	var parsed: Variant = _try_vector2(_state.get(key))
+	if parsed == null:
+		return fallback
+	return Vector2(parsed)
+
+
+func _try_vector2(value: Variant) -> Variant:
+	match typeof(value):
+		TYPE_VECTOR2:
+			return value
+		TYPE_VECTOR2I:
+			return Vector2(value)
+		TYPE_ARRAY:
+			if value.size() >= 2:
+				var array_x: Variant = _try_number(value[0])
+				var array_y: Variant = _try_number(value[1])
+				if array_x != null and array_y != null:
+					return Vector2(float(array_x), float(array_y))
+		TYPE_DICTIONARY:
+			if value.has("x") and value.has("y"):
+				var dict_x: Variant = _try_number(value["x"])
+				var dict_y: Variant = _try_number(value["y"])
+				if dict_x != null and dict_y != null:
+					return Vector2(float(dict_x), float(dict_y))
+			for key in [
+				"position",
+				"pos",
+				"world_position",
+				"global_position",
+				"coordinates",
+			]:
+				if value.has(key):
+					var nested: Variant = _try_vector2(value[key])
+					if nested != null:
+						return nested
+	return null
+
+
+func _try_number(value: Variant) -> Variant:
 	match typeof(value):
 		TYPE_INT, TYPE_FLOAT:
 			return float(value)
@@ -771,7 +1216,22 @@ func _state_number(key: String, fallback: float) -> float:
 			var text := str(value).strip_edges()
 			if text.is_valid_float():
 				return text.to_float()
-	return fallback
+	return null
+
+
+func _marker_position(mark: Variant) -> Variant:
+	var parsed: Variant = _try_vector2(mark)
+	if parsed != null:
+		return parsed
+
+	if typeof(mark) == TYPE_DICTIONARY:
+		# 兼容标记字典把坐标放在 value 或 point 字段中的写法。
+		for key in ["value", "point"]:
+			if mark.has(key):
+				var nested: Variant = _try_vector2(mark[key])
+				if nested != null:
+					return nested
+	return null
 
 
 func _state_bool(key: String, fallback: bool) -> bool:
@@ -797,21 +1257,142 @@ func _state_text(key: String, fallback: String) -> String:
 	return str(value)
 
 
-func _format_resources() -> String:
-	var value: Variant = _state.get("resources", 0)
-	if typeof(value) == TYPE_DICTIONARY:
-		var entries := ""
-		var count := 0
-		for key: Variant in value:
-			if count >= 2:
-				break
-			if not entries.is_empty():
-				entries += " · "
-			entries += "%s %s" % [str(key), _format_scalar(value[key])]
-			count += 1
-		return entries if not entries.is_empty() else "0"
+func _get_input_hints() -> Array[String]:
+	var defaults: Array[String] = []
+	for hint: Variant in DEFAULT_INPUT_HINTS:
+		defaults.append(str(hint))
 
-	return _format_scalar(value)
+	var raw: Variant = _state.get("input_hints")
+	var hints: Array[String] = []
+	match typeof(raw):
+		TYPE_STRING, TYPE_STRING_NAME:
+			for line: String in str(raw).split("\n", false):
+				var text := line.strip_edges()
+				if not text.is_empty():
+					hints.append(text)
+		TYPE_ARRAY, TYPE_PACKED_STRING_ARRAY:
+			for item: Variant in raw:
+				var text := _input_hint_text(item)
+				if not text.is_empty():
+					hints.append(text)
+		TYPE_DICTIONARY:
+			for key: Variant in raw:
+				var value: Variant = raw[key]
+				var value_text := _input_hint_text(value)
+				if value_text.is_empty():
+					continue
+				var key_text := str(key).strip_edges().replace("_", " ")
+				hints.append(
+					"%s   %s" % [key_text, value_text] if not key_text.is_empty() else value_text
+				)
+
+	return hints if not hints.is_empty() else defaults
+
+
+func _input_hint_text(item: Variant) -> String:
+	if typeof(item) == TYPE_DICTIONARY:
+		for key in ["text", "hint", "label"]:
+			if item.has(key):
+				return str(item[key]).strip_edges()
+
+		var keys_text := str(
+			item.get("keys", item.get("key", item.get("shortcut", "")))
+		).strip_edges()
+		var action_text := str(item.get("action", item.get("description", ""))).strip_edges()
+		if keys_text.is_empty():
+			return action_text
+		if action_text.is_empty():
+			return keys_text
+		return "%s   %s" % [keys_text, action_text]
+
+	if typeof(item) == TYPE_ARRAY:
+		var parts: Array[String] = []
+		for part: Variant in item:
+			var text := str(part).strip_edges()
+			if not text.is_empty():
+				parts.append(text)
+		return "   ".join(parts)
+
+	return str(item).strip_edges()
+
+
+func _get_resource_display(resources: Variant, primary: bool) -> Dictionary:
+	var label := "晶尘" if primary else "深核"
+	var amount := 0
+	var primary_aliases := [
+		"晶尘",
+		"普通晶尘",
+		"dust",
+		"crystal",
+		"crystals",
+		"shard",
+		"shards",
+		"common_dust",
+		"ordinary_dust",
+	]
+	var deep_core_aliases := [
+		"深核",
+		"深层晶核",
+		"深核晶尘",
+		"deep_core",
+		"deep core",
+		"deepcore",
+		"core",
+		"core_crystal",
+	]
+	var aliases := primary_aliases if primary else deep_core_aliases
+	var other_aliases := deep_core_aliases if primary else primary_aliases
+
+	match typeof(resources):
+		TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_STRING_NAME:
+			if primary:
+				amount = roundi(_variant_number(resources, 0.0))
+		TYPE_DICTIONARY:
+			for key: Variant in resources:
+				if str(key).strip_edges().to_lower() in aliases:
+					return {
+						"label": label,
+						"amount": _resource_amount(resources[key]),
+					}
+
+			# 未识别资源名时仍按顺序兼容旧字典，但不把另一种资源误当成本项。
+			var fallback_keys: Array[Variant] = []
+			for key: Variant in resources:
+				if str(key).strip_edges().to_lower() in other_aliases:
+					continue
+				fallback_keys.append(key)
+			var fallback_index := 0 if primary else 1
+			if fallback_keys.size() > fallback_index:
+				var fallback_key: Variant = fallback_keys[fallback_index]
+				return {
+					"label": str(fallback_key),
+					"amount": _resource_amount(resources[fallback_key]),
+				}
+
+	return {"label": label, "amount": amount}
+
+
+func _resource_amount(value: Variant) -> int:
+	var parsed: Variant = _try_number(value)
+	if parsed != null:
+		return roundi(float(parsed))
+	if typeof(value) == TYPE_DICTIONARY:
+		for key in ["amount", "value", "count"]:
+			if value.has(key):
+				return roundi(_variant_number(value[key], 0.0))
+	return 0
+
+
+func _format_resources() -> String:
+	var resources: Variant = _state.get("resources", 0)
+	var primary := _get_resource_display(resources, true)
+	var deep_core := _get_resource_display(resources, false)
+	return "%s %s · %s %s" % [
+		str(primary["label"]),
+		_format_integer(int(primary["amount"])),
+		str(deep_core["label"]),
+		_format_integer(int(deep_core["amount"])),
+	]
 
 
 func _format_scalar(value: Variant) -> String:

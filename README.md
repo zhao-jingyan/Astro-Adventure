@@ -1,64 +1,68 @@
-# Astro Adventure
+# Astro Adventure / 回声航路
 
-《回声航路》的灰盒原型工程，当前使用 Godot 4.7 和 GDScript。
+一款单局制俯视角太空生存原型。驾驶驾驶员离开回声号采集紫晶，在四个炮位部署并升级自动炮台，击退逐渐增强的五波敌潮，保护飞船直到航道恢复安全。
 
-## 环境
+当前版本使用 Godot 4.7 和 GDScript，全部画面由引擎原生绘制，不依赖外部美术资源。
 
-- macOS Apple Silicon
-- Godot 4.7.2
-- Git
+## 游戏循环
 
-Godot 已安装到：
+1. **布防**：每波开始前有准备时间，可提前按 Enter 迎战。
+2. **采集**：靠近紫晶即可自动回收到飞船资源库。
+3. **建造**：靠近飞船四周的炮位按 E 建造炮台；再次按 E 升级，最高三级。
+4. **战斗**：驾驶员与炮台共同射击敌人，敌人会尝试摧毁回声号。
+5. **修复**：靠近飞船且不在炮位交互范围时按 E，消耗资源修复船体。
+6. **推进**：清空敌潮后进入下一轮准备阶段，五波全部清除即胜利。
 
-```text
-/Applications/Godot.app
-```
+## 操作
 
-终端中的 Godot 命令：
+| 操作 | 按键 |
+| --- | --- |
+| 移动 | `WASD` / 方向键 |
+| 射击 | 按住鼠标左键朝光标射击，或按住 Space 自动瞄准最近敌人 |
+| 建造 / 升级 / 修复 | `E` |
+| 提前开始敌潮 | `Enter` |
+| 暂停 / 继续 | `Esc` |
+| 胜负结算后重新开始 | `R` |
+
+## 当前内容
+
+- 五波逐步增强的敌潮，包含侦察体、重装体和远程喷吐体。
+- 四座可独立建造、升级至三级的自动炮台。
+- 玩家武器、敌方弹道、驾驶员失联与跃迁重构。
+- 可采集并持续刷新的紫晶资源点。
+- 船体耐久、资源、分数、波次和战斗提示 HUD。
+- 动态星空、星云、陨石、粒子、弹道和受击反馈。
+- 完全程序化生成的武器、爆炸、建造、升级与胜负电子音效。
+- 暂停、胜利、失败与快速重开流程。
+
+## 运行
+
+要求 Godot 4.7 或兼容的 4.7.x 版本。
 
 ```bash
-godot --version
-```
-
-## 打开工程
-
-在 Finder 中双击 `project.godot`，或者执行：
-
-```bash
-open -a Godot /Users/zhaojingyan/Documents/Codex/2026-10-25/start-loop-ui-ui-end-loop/code/Astro-Adventure
-```
-
-## 命令行运行
-
-```bash
-cd /Users/zhaojingyan/Documents/Codex/2026-10-25/start-loop-ui-ui-end-loop/code/Astro-Adventure
 godot --path .
 ```
 
-只检查导入和启动，不打开游戏窗口：
+也可以直接在 Godot 编辑器中打开 `project.godot`。
+
+快速检查项目可以启动：
 
 ```bash
 godot --headless --path . --editor --quit
-godot --headless --path . --quit-after 2
+godot --headless --path . --quit-after 120
+godot --headless --path . --script tests/runtime_smoke.gd
+godot --headless --path . --script tests/gameplay_balance.gd
 ```
 
-## 当前验证内容
-
-- 主场景可以启动。
-- WASD 或方向键控制玩家移动。
-- 飞船、基地范围和四个炮台占位可以绘制。
-- Esc 可以退出游戏。
-
-## 目录约定
+## 目录
 
 ```text
 scenes/   场景
-scripts/  脚本
-assets/   美术、音频和字体
-systems/  敌潮、经济、胜负等系统
-data/     可配置的数据资源
+scripts/  游戏、玩家、敌人、炮台和 HUD 脚本
+tests/    无窗口运行时冒烟测试
+assets/   后续美术、音频和字体资源
+systems/  后续可独立的复杂系统
+data/     后续可配置的数据资源
 ```
 
-当前仍是环境与启动验证版本，尚未加入敌人、资源采集、炮台建造和飞船耐久。
-
-如果按键后画面没有移动，请先点击游戏窗口再操作。场景左上角显示“键盘输入：已收到”后，表示窗口已经成功接收到键盘事件。
+画面缩放到 1280 × 720 的横屏逻辑分辨率。若键盘没有响应，请先点击游戏窗口使其获得焦点。

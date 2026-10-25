@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="EnemySpeciesDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/enemy_species_definition.gd" id="1_enemy"]
+
+[resource]
+script = ExtResource("1_enemy")
+id = &"spitter"
+display_name_key = "enemy.spitter.name"
+display_name_fallback = "喷吐体"
+visual_kind = 2
+behavior_id = &"ranged"
+traits = PackedStringArray("ranged", "kiter")
+max_health = 74.0
+move_speed = 48.0
+radius = 15.0
+reward = 13
+attack_damage = 11.0
+attack_interval = 2.0
+attack_range = 350.0
+projectile_speed = 165.0
+projectile_color = Color(0.615686, 1, 0.415686, 1)
+body_color = Color(0.713725, 0.423529, 1, 1)
+aggro_radius = 430.0
+leash_radius = 1050.0

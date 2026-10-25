@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AchievementDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/achievement_definition.gd" id="1_achievement"]
+
+[resource]
+script = ExtResource("1_achievement")
+id = &"first_cross_map"
+display_name_key = "achievement.first_cross_map.name"
+description_key = "achievement.first_cross_map.description"
+display_name_fallback = "初次跨图"
+description_fallback = "首次抵达 Khepri-9 的另一片区域。"
+event_name = &"travel_completed"
+target_count = 1
+hidden = false

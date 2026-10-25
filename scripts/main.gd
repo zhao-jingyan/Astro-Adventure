@@ -13,7 +13,6 @@ enum Phase {
 
 const WORLD_SIZE := Vector2(7680.0, 5120.0)
 const SHIP_POSITION := WORLD_SIZE * 0.5
-const PLANET_NAME := "KHEPRI-9"
 const FUEL_MAX := 40
 const PLAYER_SPEED := 155.0
 const PLAYER_SPRINT_MULTIPLIER := 1.55
@@ -25,6 +24,7 @@ const STAMINA_RECOVERY_DELAY := 0.7
 const PULSE_RADIUS := 142.0
 const PULSE_COST := 24.0
 const PULSE_COOLDOWN := 4.0
+const BASE_PLAYER_HEALTH := 100.0
 const FUEL_CELL_COUNT := 15
 const LOCAL_CRYSTAL_COUNT := 18
 const REMOTE_CRYSTAL_COUNT := 18
@@ -40,6 +40,7 @@ const INITIAL_PREP_TIME := 24.0
 const LATER_PREP_TIME := 38.0
 const NETWORK_PORT := 7777
 const NETWORK_SEND_INTERVAL := 0.09
+const DEFAULT_PLANET_NAME := "KHEPRI-9"
 
 const COLOR_CYAN := Color("#68e0d0")
 const COLOR_ICE := Color("#d9f7f3")
@@ -47,41 +48,6 @@ const COLOR_AMBER := Color("#f0b45f")
 const COLOR_RED := Color("#ff6f68")
 const COLOR_VIOLET := Color("#a78bfa")
 const COLOR_DARK := Color(0.025, 0.018, 0.015, 1.0)
-
-const LEVELS := [
-	{
-		"id": "red_basin",
-		"name": "赤砂盆地",
-		"map_distance": Vector2(0.0, 0.0),
-		"danger": 1,
-		"description": "着陆区附近分布着低产燃油罐，适合补充基础航程。",
-		"seed": 137,
-	},
-	{
-		"id": "rust_rift",
-		"name": "铁锈裂谷",
-		"map_distance": Vector2(1.0, 0.15),
-		"danger": 2,
-		"description": "撕裂地表下埋有较高产燃油，掠食体活动频繁。",
-		"seed": 271,
-	},
-	{
-		"id": "glass_dunes",
-		"name": "琉璃沙海",
-		"map_distance": Vector2(0.8, -1.25),
-		"danger": 2,
-		"description": "强风磨出的玻璃沙丘，燃油点稀疏但单次储量更高。",
-		"seed": 419,
-	},
-	{
-		"id": "deep_highland",
-		"name": "深核高原",
-		"map_distance": Vector2(2.35, 0.45),
-		"danger": 3,
-		"description": "远航终点。高浓度燃油和高威胁怪物同时出现。",
-		"seed": 733,
-	},
-]
 
 const INPUT_KEYS := {
 	"move_left": [KEY_A, KEY_LEFT],
@@ -98,6 +64,10 @@ const INPUT_KEYS := {
 }
 
 var phase: Phase = Phase.PREPARATION
+var LEVELS: Array = []
+var enemy_species_by_id: Dictionary = {}
+var current_planet_name := DEFAULT_PLANET_NAME
+var current_planet_music: StringName = &"main"
 var current_level_index := 0
 var visited_levels: Dictionary = {0: true}
 var fuel := 5
@@ -116,8 +86,8 @@ var ambient_respawn_timer := 62.0
 var level_select_return_phase: Phase = Phase.VICTORY
 
 var player_position := SHIP_POSITION + Vector2(112.0, 0.0)
-var player_health := 100.0
-var player_health_max := 100.0
+var player_health := BASE_PLAYER_HEALTH
+var player_health_max := BASE_PLAYER_HEALTH
 var player_alive := true
 var player_invulnerability := 0.0
 var respawn_timer := 0.0
@@ -133,7 +103,7 @@ var walk_phase := 0.0
 var fuel_cells: Array[Dictionary] = []
 var enemies: Array[Enemy] = []
 var crystals: Array[Dictionary] = []
-var wave_spawn_queue: Array[int] = []
+var wave_spawn_queue: Array[StringName] = []
 var turrets: Array = [null, null, null, null]
 var projectiles: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
@@ -149,6 +119,10 @@ var rng := RandomNumberGenerator.new()
 var camera: Camera2D
 var player_marker: Node2D
 var planet_surface: PlanetSurface
+var terrain_query := TerrainQuery.new()
+var interaction_resolver: InteractionResolver
+var turret_interactables: Array[Interactable] = []
+var ship_interactable: Interactable
 var hud: GameHUD
 var level_select: LevelSelect
 var audio: GameAudio
@@ -159,15 +133,100 @@ func _ready() -> void:
 	Engine.max_fps = 60
 	rng.randomize()
 	_ensure_input_actions()
+	_load_content_catalog()
+	_setup_content_services()
 	_setup_audio()
 	_setup_hud()
 	_setup_level_select()
 	_setup_world()
+	_setup_interactions()
 	_connect_multiplayer_signals()
 	_load_level(0, true)
 	_start_preparation(1)
 	_parse_launch_arguments()
 	queue_redraw()
+
+
+func _load_content_catalog() -> void:
+	LEVELS.clear()
+	enemy_species_by_id.clear()
+
+	for level_resource: Resource in ContentRegistry.get_levels():
+		if not level_resource.has_method("to_dict"):
+			continue
+		var level: Dictionary = level_resource.call("to_dict")
+		level["name"] = _localized_text(
+			str(level.get("display_name_key", "")),
+			str(level.get("display_name_fallback", level.get("id", "")))
+		)
+		level["description"] = _localized_text(
+			str(level.get("description_key", "")),
+			str(level.get("description_fallback", ""))
+		)
+		level["map_distance"] = level.get("map_position", Vector2.ZERO)
+		level["seed"] = int(level.get("terrain_seed", 0))
+		LEVELS.append(level)
+
+	LEVELS.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return Vector2(a["map_position"]).length_squared() < Vector2(b["map_position"]).length_squared()
+	)
+	for species: Resource in ContentRegistry.get_enemy_species_all():
+		enemy_species_by_id[species.get("id")] = species
+
+	if LEVELS.is_empty():
+		push_error("内容目录中没有任何关卡")
+	var validation_errors := ContentRegistry.validate_all()
+	for validation_error: String in validation_errors:
+		push_warning(validation_error)
+
+
+func _localized_text(key: String, fallback: String) -> String:
+	if key.is_empty():
+		return fallback
+	var translated := I18n.translate(key)
+	return fallback if translated == key and not fallback.is_empty() else translated
+
+
+## 切换语言并刷新所有由数据资源生成的显示文本。
+func set_locale(locale: String) -> bool:
+	if not I18n.set_locale(locale):
+		return false
+	_load_content_catalog()
+	if current_level_index >= 0 and current_level_index < LEVELS.size():
+		var level: Dictionary = LEVELS[current_level_index]
+		var planet := ContentRegistry.get_planet(StringName(str(level.get("planet_id", ""))))
+		if planet != null:
+			var fallback := str(planet.get("display_name_fallback"))
+			current_planet_name = _localized_text(
+				str(planet.get("display_name_key")),
+				fallback if not fallback.is_empty() else DEFAULT_PLANET_NAME
+			)
+	_refresh_hud()
+	return true
+
+
+func _setup_content_services() -> void:
+	Relics.setup(GameEvents, ContentRegistry.get_relics())
+	var achievement_definitions: Array[AchievementDefinition] = []
+	for definition: Resource in ContentRegistry.get_achievements():
+		if definition is AchievementDefinition:
+			achievement_definitions.append(definition)
+	var achievement_save := SaveStore.new("user://saves", Achievements.SAVE_NAMESPACE)
+	Achievements.setup(GameEvents, achievement_save, achievement_definitions)
+	if not GameEvents.relic_acquired.is_connected(_on_relic_acquired):
+		GameEvents.relic_acquired.connect(_on_relic_acquired)
+	_apply_relic_modifiers()
+
+
+func _on_relic_acquired(_relic_id: String, _stack_count: int) -> void:
+	_apply_relic_modifiers()
+
+
+func _apply_relic_modifiers() -> void:
+	var previous_max := player_health_max
+	player_health_max = Relics.get_modifier("max_health_add", BASE_PLAYER_HEALTH)
+	if player_health_max > previous_max and player_alive:
+		player_health = minf(player_health_max, player_health + player_health_max - previous_max)
 
 
 func _process(delta: float) -> void:
@@ -194,8 +253,7 @@ func _process(delta: float) -> void:
 		if travel_timer <= 0.0:
 			_load_level(pending_level_index, true)
 			_start_preparation(1)
-			if audio:
-				audio.play_music(&"main")
+			GameEvents.travel_completed.emit(str(LEVELS[current_level_index]["id"]))
 			if hud:
 				hud.show_notice("已抵达 %s" % LEVELS[current_level_index]["name"], COLOR_CYAN, 1.8)
 		_refresh_hud()
@@ -233,7 +291,6 @@ func _setup_audio() -> void:
 	audio = GameAudio.new()
 	audio.name = "GameAudio"
 	add_child(audio)
-	audio.play_music(&"main", 0.0)
 
 
 func _setup_hud() -> void:
@@ -283,19 +340,74 @@ func _setup_world() -> void:
 	camera.make_current()
 
 
+func _setup_interactions() -> void:
+	interaction_resolver = InteractionResolver.new(player_marker)
+
+	ship_interactable = Interactable.new()
+	ship_interactable.name = "ShipInteractable"
+	ship_interactable.interaction_id = &"ship"
+	ship_interactable.prompt_key = &"interaction.ship"
+	ship_interactable.interaction_radius = PLAYER_INTERACT_RADIUS
+	ship_interactable.priority = 1
+	ship_interactable.position = SHIP_POSITION
+	add_child(ship_interactable)
+	ship_interactable.interaction_requested.connect(_on_world_interaction)
+
+	for slot_index in range(4):
+		var target := Interactable.new()
+		target.name = "TurretMount%d" % (slot_index + 1)
+		target.interaction_id = StringName("turret_%d" % slot_index)
+		target.prompt_key = &"interaction.turret"
+		target.interaction_radius = 70.0
+		target.priority = 10
+		target.position = _get_mount_position(slot_index)
+		add_child(target)
+		target.interaction_requested.connect(_on_world_interaction)
+		turret_interactables.append(target)
+
+
 func _load_level(level_index: int, reset_player: bool) -> void:
 	current_level_index = clampi(level_index, 0, LEVELS.size() - 1)
-	visited_levels[LEVELS[current_level_index]["id"]] = true
+	var loaded_level_id := str(LEVELS[current_level_index]["id"])
+	visited_levels[loaded_level_id] = true
 	var level: Dictionary = LEVELS[current_level_index]
 	rng.seed = int(level["seed"])
+	var planet_id := StringName(str(level.get("planet_id", "")))
+	var planet_definition := ContentRegistry.get_planet(planet_id)
+	if planet_definition != null:
+		var planet_name_fallback := str(planet_definition.get("display_name_fallback"))
+		if planet_name_fallback.is_empty():
+			planet_name_fallback = DEFAULT_PLANET_NAME
+		current_planet_name = _localized_text(
+			str(planet_definition.get("display_name_key")),
+			planet_name_fallback
+		)
+	else:
+		current_planet_name = DEFAULT_PLANET_NAME
+	var planet_music := &"main"
+	if planet_definition != null:
+		var configured_music := StringName(str(planet_definition.get("music_track_id")))
+		if not configured_music.is_empty():
+			planet_music = configured_music
+	current_planet_music = planet_music
 
 	if is_instance_valid(planet_surface):
 		planet_surface.queue_free()
 	planet_surface = PlanetSurface.new()
 	planet_surface.name = "Khepri9Surface"
 	planet_surface.z_index = -20
+	planet_surface.apply_visual_profile(planet_definition)
 	planet_surface.configure(WORLD_SIZE, SHIP_POSITION, int(level["seed"]))
 	add_child(planet_surface)
+	terrain_query.configure_from_dictionary({
+		"speed_multipliers": {
+			"safe": 1.0,
+			"rust": 0.88,
+			"deep": 0.74,
+		},
+		"blocked_tags": ["rock", "ridge", "world_edge"],
+		"danger_tags": ["deep"],
+	})
 
 	for enemy: Enemy in enemies:
 		if is_instance_valid(enemy):
@@ -329,6 +441,10 @@ func _load_level(level_index: int, reset_player: bool) -> void:
 	_spawn_crystals()
 	_spawn_fuel_cells()
 	_spawn_creatures()
+	if audio:
+		audio.play_music(current_planet_music, 0.0)
+	GameEvents.level_started.emit(loaded_level_id)
+	GameEvents.level_changed.emit(loaded_level_id)
 	queue_redraw()
 
 
@@ -421,11 +537,14 @@ func _spawn_ambient_creature(index: int) -> void:
 		if Vector2(crystal["position"]).distance_to(SHIP_POSITION) > 1400.0:
 			anchors.append(crystal)
 
-	var kind: int = Enemy.EnemyKind.SCOUT
+	var species_id: StringName = &"scout"
 	if index % 5 == 4:
-		kind = Enemy.EnemyKind.BRUISER
+		species_id = &"bruiser"
 	elif index % 4 == 3:
-		kind = Enemy.EnemyKind.SPITTER
+		species_id = &"spitter"
+	var species := ContentRegistry.get_enemy_species(species_id) as EnemySpeciesDefinition
+	if species == null:
+		return
 
 	var spawn_position := SHIP_POSITION + Vector2(1900.0, 0.0)
 	if not anchors.is_empty():
@@ -439,14 +558,18 @@ func _spawn_ambient_creature(index: int) -> void:
 	var enemy := Enemy.new()
 	enemy.position = spawn_position
 	enemy.z_index = 4
-	enemy.configure(kind, spawn_position, spawn_position, 1.0)
+	enemy.configure(species, spawn_position, spawn_position, 1.0)
 	add_child(enemy)
 	enemies.append(enemy)
 	enemy.set_meta(&"wave_enemy", false)
 	enemy.attack_player.connect(_on_enemy_attack_player)
 	enemy.projectile_requested.connect(_on_enemy_projectile_requested.bind(enemy))
 	enemy.defeated.connect(_on_enemy_defeated)
-	enemy.set_player_target(player_marker, 410.0, 940.0)
+	enemy.set_player_target(
+		player_marker,
+		species.aggro_radius,
+		species.leash_radius
+	)
 
 
 func _update_player(delta: float) -> void:
@@ -482,17 +605,38 @@ func _update_player(delta: float) -> void:
 	else:
 		stamina_recovery_delay = maxf(0.0, stamina_recovery_delay - delta)
 		if stamina_recovery_delay <= 0.0:
-			stamina = minf(STAMINA_MAX, stamina + STAMINA_RECOVERY * delta)
+			stamina = minf(
+				STAMINA_MAX,
+				stamina + STAMINA_RECOVERY
+					* Relics.get_modifier("stamina_recovery_multiplier", 1.0)
+					* delta
+			)
 
 	if player_moving:
 		last_move_direction = direction.normalized()
 		var speed_multiplier := PLAYER_SPRINT_MULTIPLIER if sprinting else 1.0
-		player_position += direction.normalized() * PLAYER_SPEED * speed_multiplier * delta
-		walk_phase += delta * 7.0
-		player_position = player_position.clamp(
+		var terrain_sample := planet_surface.get_terrain_sample(player_position, 12.0)
+		var terrain_speed := terrain_query.get_speed_multiplier(terrain_sample["tags"])
+		var relic_speed := Relics.get_modifier("move_speed_multiplier", 1.0)
+		var desired_position := player_position + (
+			direction.normalized()
+			* PLAYER_SPEED
+			* speed_multiplier
+			* terrain_speed
+			* relic_speed
+			* delta
+		)
+		desired_position = desired_position.clamp(
 			Vector2(48.0, 48.0),
 			WORLD_SIZE - Vector2(48.0, 48.0)
 		)
+		player_position = terrain_query.slide_move(
+			player_position,
+			desired_position,
+			12.0,
+			Callable(planet_surface, "get_terrain_sample")
+		)
+		walk_phase += delta * 7.0
 
 	player_marker.position = player_position
 	camera.position = player_position
@@ -504,14 +648,22 @@ func _update_player(delta: float) -> void:
 
 
 func _try_interact() -> void:
-	var slot_index := _nearest_turret_slot()
-	if slot_index >= 0:
-		_try_turret_interaction(slot_index)
-		return
+	player_marker.position = player_position
+	interaction_resolver.interact_nearest([], {"actor": "player"})
 
-	if player_position.distance_to(SHIP_POSITION) > PLAYER_INTERACT_RADIUS:
-		return
 
+func _on_world_interaction(target_id: StringName, payload: Dictionary) -> void:
+	GameEvents.interaction_performed.emit(str(target_id), payload)
+	if str(target_id).begins_with("turret_"):
+		var slot_index := int(str(target_id).trim_prefix("turret_"))
+		if slot_index >= 0 and slot_index < turrets.size():
+			_try_turret_interaction(slot_index)
+		return
+	if target_id == &"ship":
+		_handle_ship_interaction()
+
+
+func _handle_ship_interaction() -> void:
 	if phase == Phase.VICTORY:
 		if network_role != "offline":
 			if hud:
@@ -627,8 +779,12 @@ func _update_fuel_cells() -> void:
 		var cell: Dictionary = fuel_cells[index]
 		if player_position.distance_to(cell["position"]) > 34.0:
 			continue
-		var gained := mini(int(cell["amount"]), FUEL_MAX - fuel)
-		fuel = mini(FUEL_MAX, fuel + int(cell["amount"]))
+		var requested_amount := roundi(
+			float(cell["amount"]) * Relics.get_modifier("fuel_gain_multiplier", 1.0)
+		)
+		var gained := mini(requested_amount, FUEL_MAX - fuel)
+		fuel = mini(FUEL_MAX, fuel + requested_amount)
+		GameEvents.fuel_collected.emit(gained, fuel)
 		_add_explosion(cell["position"], COLOR_AMBER, 9, 70.0)
 		if gained > 0:
 			if hud:
@@ -652,6 +808,9 @@ func _update_collectibles() -> void:
 		resources += int(crystal["value"])
 		var core_amount := int(crystal["core_amount"])
 		deep_cores += core_amount
+		GameEvents.resource_collected.emit("crystal", int(crystal["value"]), resources)
+		if core_amount > 0:
+			GameEvents.resource_collected.emit("deep_core", core_amount, deep_cores)
 		score += 5 if core_amount == 0 else 55
 		var crystal_color := COLOR_VIOLET if core_amount > 0 else COLOR_CYAN
 		_add_explosion(crystal["position"], crystal_color, 8 if core_amount == 0 else 12, 80.0)
@@ -715,6 +874,8 @@ func _on_enemy_defeated(enemy: Node, reward: int) -> void:
 		enemies.erase(enemy)
 	resources += reward
 	score += reward * 8
+	if enemy is Enemy:
+		GameEvents.enemy_defeated.emit(str((enemy as Enemy).get_species_id()))
 	_add_explosion(enemy.global_position, COLOR_AMBER, 9, 75.0)
 	if audio:
 		audio.play_explosion()
@@ -772,6 +933,7 @@ func _damage_player(damage: float) -> void:
 		return
 	player_health = maxf(0.0, player_health - damage)
 	player_invulnerability = 0.8
+	GameEvents.player_damaged.emit(damage, player_health)
 	_add_explosion(player_position, COLOR_RED, 8, 85.0)
 	if audio:
 		audio.play_hit()
@@ -901,6 +1063,8 @@ func _on_destination_selected(level_index: int) -> void:
 		return
 
 	fuel -= cost
+	var origin_level_id := str(LEVELS[current_level_index]["id"])
+	var destination_level_id := str(LEVELS[level_index]["id"])
 	pending_level_index = level_index
 	phase = Phase.TRAVEL
 	travel_timer = 1.1
@@ -910,18 +1074,23 @@ func _on_destination_selected(level_index: int) -> void:
 		hud.show_notice("起飞 · 航程消耗 %d 燃油" % cost, COLOR_AMBER, 1.6)
 	if audio:
 		audio.play_wave()
+	GameEvents.travel_started.emit(origin_level_id, destination_level_id, cost)
 
 
 func _start_preparation(next_wave: int) -> void:
 	phase = Phase.PREPARATION
 	wave = next_wave
-	prep_timer = INITIAL_PREP_TIME if wave == 1 else LATER_PREP_TIME
+	var prep_key := "initial_prep_seconds" if wave == 1 else "later_prep_seconds"
+	var prep_fallback := INITIAL_PREP_TIME if wave == 1 else LATER_PREP_TIME
+	prep_timer = float(LEVELS[current_level_index].get(prep_key, prep_fallback))
 	wave_spawn_queue.clear()
 	spawn_timer = 0.0
 	wave_assault_timer = 0.0
+	var level_id := str(LEVELS[current_level_index]["id"])
+	GameEvents.preparation_started.emit(level_id, wave)
 	if hud:
 		hud.show_notice(
-			"第 %d / %d 波将在倒计时后抵达" % [wave, TOTAL_WAVES],
+			"第 %d / %d 波将在倒计时后抵达" % [wave, _current_total_waves()],
 			COLOR_AMBER,
 			2.2
 		)
@@ -931,24 +1100,55 @@ func _begin_combat() -> void:
 	phase = Phase.COMBAT
 	wave_spawn_queue.clear()
 	spawn_timer = 0.2
+	var configured_counts: Variant = LEVELS[current_level_index].get("wave_enemy_counts", [])
 	var enemy_count := 3 if wave == 1 else 5 + wave * 3
+	if configured_counts is Array and wave <= (configured_counts as Array).size():
+		enemy_count = maxi(1, int(configured_counts[wave - 1]))
 	for index in range(enemy_count):
-		var kind: int = Enemy.EnemyKind.SCOUT
-		if wave >= 3 and index % 7 == 6:
-			kind = Enemy.EnemyKind.SPITTER
-		elif wave >= 2 and index % 5 == 4:
-			kind = Enemy.EnemyKind.BRUISER
-		wave_spawn_queue.append(kind)
+		wave_spawn_queue.append(_roll_enemy_species(wave))
 
 	wave_assault_timer = 7.0 if wave == 1 else 0.0
+	var level_id := str(LEVELS[current_level_index]["id"])
+	GameEvents.wave_started.emit(level_id, wave)
 	if hud:
 		if wave == 1:
 			hud.show_notice("第一波 · 少量侦察体在营地周围游荡", COLOR_AMBER, 2.2)
 		else:
-			hud.show_notice("第 %d / %d 波抵达" % [wave, TOTAL_WAVES], COLOR_RED, 1.8)
+			hud.show_notice("第 %d / %d 波抵达" % [wave, _current_total_waves()], COLOR_RED, 1.8)
 	if audio:
 		audio.play_wave()
 		audio.play_music(&"anomaly")
+
+
+func _roll_enemy_species(current_wave: int) -> StringName:
+	var table_value: Variant = LEVELS[current_level_index].get("enemy_spawn_table", [])
+	if not (table_value is Array):
+		return &"scout"
+
+	var total_weight := 0.0
+	var candidates: Array[Dictionary] = []
+	for entry_value: Variant in table_value:
+		if not (entry_value is Dictionary):
+			continue
+		var entry: Dictionary = entry_value
+		var min_wave := int(entry.get("min_wave", 1))
+		var max_wave := int(entry.get("max_wave", TOTAL_WAVES))
+		if current_wave < min_wave or current_wave > max_wave:
+			continue
+		var weight := maxf(0.0, float(entry.get("weight", 0.0)))
+		if weight <= 0.0:
+			continue
+		candidates.append(entry)
+		total_weight += weight
+
+	if candidates.is_empty() or total_weight <= 0.0:
+		return &"scout"
+	var roll := rng.randf_range(0.0, total_weight)
+	for entry: Dictionary in candidates:
+		roll -= float(entry["weight"])
+		if roll <= 0.0:
+			return StringName(str(entry.get("enemy_id", "scout")))
+	return StringName(str(candidates[-1].get("enemy_id", "scout")))
 
 
 func _update_wave_logic(delta: float) -> void:
@@ -983,7 +1183,11 @@ func _update_wave_logic(delta: float) -> void:
 func _spawn_wave_enemy() -> void:
 	if wave_spawn_queue.is_empty():
 		return
-	var kind: int = wave_spawn_queue.pop_front()
+	var species_id: StringName = wave_spawn_queue.pop_front()
+	var species := enemy_species_by_id.get(species_id) as EnemySpeciesDefinition
+	if species == null:
+		push_warning("波次引用了未知敌人物种：%s" % species_id)
+		return
 	var radius_min := 230.0 if wave == 1 else 760.0
 	var radius_max := 350.0 if wave == 1 else 980.0
 	var spawn_position := SHIP_POSITION + Vector2.from_angle(
@@ -992,7 +1196,7 @@ func _spawn_wave_enemy() -> void:
 	var enemy := Enemy.new()
 	enemy.position = spawn_position
 	enemy.z_index = 4
-	enemy.configure(kind, spawn_position, SHIP_POSITION, 1.0 + (wave - 1) * 0.14)
+	enemy.configure(species, spawn_position, SHIP_POSITION, 1.0 + (wave - 1) * 0.14)
 	add_child(enemy)
 	enemies.append(enemy)
 	enemy.set_meta(&"wave_enemy", true)
@@ -1000,18 +1204,29 @@ func _spawn_wave_enemy() -> void:
 	enemy.attack_player.connect(_on_enemy_attack_player)
 	enemy.projectile_requested.connect(_on_enemy_projectile_requested.bind(enemy))
 	enemy.defeated.connect(_on_enemy_defeated)
-	enemy.set_player_target(player_marker, 440.0, 1040.0)
+	enemy.set_player_target(
+		player_marker,
+		species.aggro_radius,
+		species.leash_radius
+	)
 	if wave == 1:
 		enemy.set_wander_around(SHIP_POSITION, 235.0)
 
 
 func _complete_wave() -> void:
 	score += wave * 120
-	if wave >= TOTAL_WAVES:
+	var level_id := str(LEVELS[current_level_index]["id"])
+	GameEvents.wave_completed.emit(level_id, wave)
+	GameEvents.wave_cleared.emit(level_id, wave)
+	if wave >= _current_total_waves():
 		_finish_level_victory()
 		return
 	resources += 4
 	_start_preparation(wave + 1)
+
+
+func _current_total_waves() -> int:
+	return maxi(1, int(LEVELS[current_level_index].get("total_waves", TOTAL_WAVES)))
 
 
 func _finish_level_victory() -> void:
@@ -1027,6 +1242,7 @@ func _finish_level_victory() -> void:
 		audio.play_music(&"discovery")
 	if hud:
 		hud.show_notice("本关完成 · 选择下一段航线", COLOR_CYAN, 2.2)
+	GameEvents.level_completed.emit(str(LEVELS[current_level_index]["id"]))
 	call_deferred("_open_level_select")
 
 
@@ -1045,6 +1261,7 @@ func _finish_defeat() -> void:
 		audio.stop_music()
 	if hud:
 		hud.show_notice("飞船失守 · 按 R 重新开始", COLOR_RED, 3.0)
+	GameEvents.level_failed.emit(str(LEVELS[current_level_index]["id"]), "ship_destroyed")
 
 
 func _on_level_select_closed() -> void:
@@ -1053,14 +1270,14 @@ func _on_level_select_closed() -> void:
 	get_tree().paused = false
 	phase = level_select_return_phase
 	if audio:
-		audio.play_music(&"main")
+		audio.play_music(current_planet_music)
 
 
 func _refresh_hud() -> void:
 	if not hud:
 		return
 	hud.update_state({
-		"location_name": "%s / %s" % [PLANET_NAME, LEVELS[current_level_index]["name"]],
+		"location_name": "%s / %s" % [current_planet_name, LEVELS[current_level_index]["name"]],
 		"fuel": fuel,
 		"fuel_max": FUEL_MAX,
 		"resources": resources,
@@ -1076,7 +1293,7 @@ func _refresh_hud() -> void:
 		"ship_hull": ship_hull,
 		"ship_hull_max": SHIP_HULL_MAX,
 		"wave": wave,
-		"total_waves": TOTAL_WAVES,
+		"total_waves": _current_total_waves(),
 		"wave_state": _get_wave_state_name(),
 		"timer": prep_timer if phase == Phase.PREPARATION else -1.0,
 		"wave_enemies": _wave_enemy_count(),
@@ -1117,8 +1334,9 @@ func _get_nearby_action() -> String:
 		return "等待返回着陆船"
 	if phase == Phase.TRAVEL:
 		return "航程进行中"
-	var slot_index := _nearest_turret_slot()
-	if slot_index >= 0:
+	var target := interaction_resolver.find_nearest()
+	if target != null and str(target.interaction_id).begins_with("turret_"):
+		var slot_index := int(str(target.interaction_id).trim_prefix("turret_"))
 		var turret: Turret = turrets[slot_index]
 		if turret == null:
 			return "E  建造炮台 #%d · %d 晶尘" % [slot_index + 1, TURRET_BUILD_COST]
@@ -1130,7 +1348,7 @@ func _get_nearby_action() -> String:
 			turret.get_upgrade_cost(),
 			core_suffix,
 		]
-	if player_position.distance_to(SHIP_POSITION) <= PLAYER_INTERACT_RADIUS:
+	if target != null and target.interaction_id == &"ship":
 		if phase == Phase.VICTORY:
 			return "E  选择下一段航线"
 		if ship_hull < SHIP_HULL_MAX:

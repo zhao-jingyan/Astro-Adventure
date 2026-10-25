@@ -77,6 +77,28 @@
 - `F3`：连接 `127.0.0.1:7777`
 - `F4`：断开联机
 
+## 工程基建
+
+玩法参数正在迁移到数据资源：
+
+- `data/planets/`：星球调色板、音乐和地形种子。
+- `data/levels/`：区域位置、危险度、准备时间、总波次和敌人刷新表。
+- `data/enemies/`：敌人物种数值、行为 id、traits、攻击与仇恨参数。
+- `data/relics/`、`data/achievements/`：遗物和成就定义。
+- `data/localization/`：中英文文本表。
+
+运行时基础服务：
+
+- EventBus：关卡、波次、资源、跨图、遗物和成就事件。
+- SaveStore：带 schema 版本和原子写入的 JSON 存档。
+- LocalizationService：语言切换、参数插值和中文回退。
+- RelicSystem：数据驱动的乘数和平直加值。
+- AchievementSystem：事件累计、幂等解锁与进度持久化。
+- Interactable / InteractionResolver：统一交互半径、优先级和 payload。
+- TerrainQuery：地形速度、阻挡、危险标签和分轴滑动。
+
+详细分层与扩展方法见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
 ## 运行与验证
 
 要求 Godot 4.7 或兼容的 4.7.x 版本。
@@ -94,15 +116,16 @@ godot --headless --path . --script tests/runtime_smoke.gd
 godot --headless --path . --script tests/travel_loop.gd
 godot --headless --path . --script tests/level_lifecycle.gd
 tests/network_smoke.sh
+tests/run_all.sh
 ```
 
 ## 目录
 
 ```text
 scenes/   主场景
-scripts/  关卡生命周期、航程图、星球地表、怪物、炮台、HUD 与音频
-tests/    关卡生命周期、航程与双进程联机测试
+scripts/  data、core、systems、world 与玩法表现层
+data/     星球、关卡、敌人、遗物、成就与 i18n 配置
+docs/     架构约束与扩展说明
+tests/    内容、服务、世界、玩法与双进程联机测试
 assets/   美术、音频和字体资源
-systems/  后续独立系统
-data/     后续星球、区域与怪物配置
 ```

@@ -9,6 +9,14 @@ config/name="Astro Adventure / 回声航路"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
+[autoload]
+
+GameEvents="*res://scripts/core/event_bus.gd"
+ContentRegistry="*res://scripts/core/content_registry.gd"
+I18n="*res://scripts/core/localization_service.gd"
+Relics="*res://scripts/systems/relic_system.gd"
+Achievements="*res://scripts/systems/achievement_system.gd"
+
 [display]
 
 window/size/viewport_width=1280

@@ -29,6 +29,7 @@ const KNOCKBACK_DECELERATION := 520.0
 const PLAYER_MELEE_REACH := 24.0
 
 var _kind: EnemyKind = EnemyKind.SCOUT
+var _species_id: StringName = &""
 var _target_position := Vector2.ZERO
 var _approach_position := Vector2.ZERO
 var _formation_angle := 0.0
@@ -49,6 +50,8 @@ var _attack_range := 0.0
 var _projectile_speed := 0.0
 var _projectile_color := Color.WHITE
 var _body_color := Color.WHITE
+var _behavior_id: StringName = &"aggressive"
+var _traits := PackedStringArray()
 
 var _knockback_velocity := Vector2.ZERO
 var _flash_time := 0.0
@@ -103,7 +106,7 @@ func _update_base_behavior(delta: float) -> void:
 	var to_target := _target_position - global_position
 	var target_distance := to_target.length()
 
-	if _kind == EnemyKind.SPITTER:
+	if _is_ranged():
 		if target_distance > 0.001:
 			_facing = to_target / target_distance
 
@@ -173,76 +176,38 @@ func is_wandering() -> bool:
 	return _wandering
 
 
-## 配置敌人的类型、出生点、基地中心和波次强度。
+## 从 EnemySpeciesDefinition 配置敌人；数值、行为和视觉类型均来自内容数据。
 ## target_position 是基地中心，不是敌人最终站位。
 func configure(
-	kind: EnemyKind,
+	species: EnemySpeciesDefinition,
 	start_position: Vector2,
 	target_position: Vector2,
 	wave_scale: float
 ) -> void:
+	if species == null:
+		push_error("Enemy.configure 需要 EnemySpeciesDefinition")
+		return
 	var safe_scale := maxf(wave_scale, 0.1)
-	var base_health := 0.0
-	var base_speed := 0.0
-	var base_radius := 0.0
-	var base_reward := 0
-	var base_damage := 0.0
-	var base_interval := 1.0
-	var formation_gap := 0.0
+	_kind = species.visual_kind
+	_species_id = species.id
+	_behavior_id = species.behavior_id
+	_traits = species.traits.duplicate()
+	_hunting_enabled = _behavior_id not in [&"passive", &"idle", &"non_aggressive"]
+	_projectile_speed = species.projectile_speed
+	_attack_range = species.attack_range
+	_projectile_color = species.projectile_color
+	_body_color = species.body_color
 
-	_kind = kind
-	match kind:
-		EnemyKind.SCOUT:
-			base_health = 42.0
-			base_speed = 76.0
-			base_radius = 12.0
-			base_reward = 6
-			base_damage = 9.0
-			base_interval = 1.35
-			formation_gap = 54.0
-			_projectile_speed = 0.0
-			_attack_range = 0.0
-			_projectile_color = Color("#6ff7ff")
-			_body_color = Color("#35d9ff")
-		EnemyKind.BRUISER:
-			base_health = 180.0
-			base_speed = 34.0
-			base_radius = 22.0
-			base_reward = 20
-			base_damage = 22.0
-			base_interval = 2.6
-			formation_gap = 92.0
-			_projectile_speed = 0.0
-			_attack_range = 0.0
-			_projectile_color = Color("#ffb15f")
-			_body_color = Color("#ff7a45")
-		EnemyKind.SPITTER:
-			base_health = 74.0
-			base_speed = 48.0
-			base_radius = 15.0
-			base_reward = 13
-			base_damage = 11.0
-			base_interval = 2.0
-			formation_gap = 166.0
-			_projectile_speed = 165.0
-			_attack_range = 350.0
-			_projectile_color = Color("#9dff6a")
-			_body_color = Color("#b66cff")
-		_:
-			push_warning("未知敌人类型，按侦察兵处理。")
-			configure(EnemyKind.SCOUT, start_position, target_position, wave_scale)
-			return
-
-	_max_health = base_health * safe_scale
+	_max_health = species.max_health * safe_scale
 	_health = _max_health
-	_move_speed = base_speed * clampf(0.9 + safe_scale * 0.1, 0.9, 1.35)
-	_radius = base_radius * clampf(sqrt(safe_scale), 0.9, 1.25)
-	_reward = maxi(1, roundi(float(base_reward) * (0.85 + safe_scale * 0.15)))
-	_attack_damage = base_damage * (1.0 + (safe_scale - 1.0) * 0.18)
+	_move_speed = species.move_speed * clampf(0.9 + safe_scale * 0.1, 0.9, 1.35)
+	_radius = species.radius * clampf(sqrt(safe_scale), 0.9, 1.25)
+	_reward = maxi(1, roundi(float(species.reward) * (0.85 + safe_scale * 0.15)))
+	_attack_damage = species.attack_damage * (1.0 + (safe_scale - 1.0) * 0.18)
 
 	# 为同一波次中的敌人错开攻击节奏，避免声音和特效完全同步。
 	var cadence_variation := 0.94 + fposmod(float(get_instance_id()), 13.0) * 0.01
-	_attack_interval = base_interval \
+	_attack_interval = species.attack_interval \
 		* clampf(1.06 - safe_scale * 0.06, 0.68, 1.05) \
 		* cadence_variation
 
@@ -256,12 +221,12 @@ func configure(
 	_hunting_player = false
 
 	# 用稳定的黄金角序列给每个实例分配环形站位。
-	var kind_offset := float(kind) * 0.71
+	var kind_offset := float(_kind) * 0.71
 	_formation_angle = fposmod(
 		float(get_instance_id()) * FORMATION_GOLDEN_ANGLE + kind_offset,
 		TAU
 	)
-	_formation_radius = formation_gap + _radius
+	_formation_radius = maxf(_radius * 4.2, 54.0) + _radius
 	_approach_position = _target_position + Vector2.from_angle(_formation_angle) * _formation_radius
 
 	var initial_direction := _approach_position - global_position
@@ -299,6 +264,14 @@ func get_radius() -> float:
 
 func get_kind() -> EnemyKind:
 	return _kind
+
+
+func get_species_id() -> StringName:
+	return _species_id
+
+
+func has_trait(trait_name: StringName) -> bool:
+	return _traits.has(trait_name)
 
 
 func is_alive() -> bool:
@@ -342,7 +315,7 @@ func _update_player_hunt(delta: float) -> bool:
 	if not to_player.is_zero_approx():
 		_facing = to_player.normalized()
 
-	if _kind == EnemyKind.SPITTER:
+	if _is_ranged():
 		if distance_to_player <= _attack_range:
 			_try_ranged_attack()
 		_move_toward_position(player_position, delta)
@@ -378,6 +351,10 @@ func _pick_wander_target() -> void:
 	var angle := _wander_rng.randf_range(0.0, TAU)
 	var distance := sqrt(_wander_rng.randf()) * _wander_radius
 	_wander_target = _wander_center + Vector2.from_angle(angle) * distance
+
+
+func _is_ranged() -> bool:
+	return _attack_range > 0.0 or _traits.has("ranged")
 
 
 func _has_valid_player_target() -> bool:

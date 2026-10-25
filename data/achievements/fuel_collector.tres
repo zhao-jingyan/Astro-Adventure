@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="AchievementDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/achievement_definition.gd" id="1_achievement"]
+
+[resource]
+script = ExtResource("1_achievement")
+id = &"fuel_collector"
+display_name_key = "achievement.fuel_collector.name"
+description_key = "achievement.fuel_collector.description"
+display_name_fallback = "燃料囤积者"
+description_fallback = "累计采集 100 单位燃油。"
+event_name = &"fuel_collected"
+target_count = 100
+amount_argument_index = 0
+hidden = false

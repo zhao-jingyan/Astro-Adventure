@@ -6,10 +6,10 @@ extends Control
 
 const DESIGN_SIZE := Vector2(1280.0, 720.0)
 const INPUT_HINTS := [
-	"WASD   移动",
-	"Shift   冲刺",
-	"E   交互 / 建造",
-	"Space   应急脉冲",
+	["control.move", "WASD   移动"],
+	["control.sprint", "Shift   冲刺"],
+	["control.interact", "E   交互 / 建造"],
+	["control.pulse", "Space   应急脉冲"],
 ]
 const TRACKED_STATE_KEYS := [
 	"location_name",
@@ -83,8 +83,15 @@ func _ready() -> void:
 
 	get_viewport().size_changed.connect(_sync_to_viewport)
 	resized.connect(_on_hud_resized)
+	var event_bus := get_node_or_null("/root/GameEvents")
+	if event_bus != null and event_bus.has_signal("locale_changed"):
+		event_bus.locale_changed.connect(_on_locale_changed)
 	_sync_to_viewport()
 	set_process(false)
+
+
+func _on_locale_changed(_locale: String) -> void:
+	queue_redraw()
 
 
 func _process(delta: float) -> void:
@@ -260,7 +267,7 @@ func _draw_top_status(font: Font) -> void:
 	_draw_text(
 		font,
 		Vector2(inner_left, label_y),
-		"当前区域",
+		_localized("hud.level", "当前区域"),
 		label_size,
 		COLOR_MUTED,
 		region_width - 8.0 * s
@@ -285,7 +292,7 @@ func _draw_top_status(font: Font) -> void:
 	_draw_text(
 		font,
 		Vector2(fuel_x, label_y),
-		"燃油 / 晶尘 / 深核",
+		_localized("hud.resources", "燃油 / 晶尘 / 深核"),
 		label_size,
 		COLOR_MUTED,
 		fuel_width - 20.0 * s
@@ -332,7 +339,7 @@ func _draw_wave_strip(font: Font) -> void:
 	_draw_text(
 		font,
 		left,
-		"飞船耐久",
+		_localized("hud.hull", "飞船耐久"),
 		font_size,
 		COLOR_MUTED,
 		74.0 * s
@@ -395,7 +402,7 @@ func _draw_driver_bars(
 		value_width,
 		track_height,
 		font_size,
-		"生命",
+		_localized("hud.health", "生命"),
 		_state_number("player_health", 100.0),
 		_state_number("player_health_max", 100.0),
 		COLOR_CYAN
@@ -408,7 +415,7 @@ func _draw_driver_bars(
 		value_width,
 		track_height,
 		font_size,
-		"体力",
+		_localized("hud.stamina", "体力"),
 		_state_number("stamina", 100.0),
 		_state_number("stamina_max", 100.0),
 		COLOR_AMBER
@@ -526,7 +533,7 @@ func _draw_input_hints(font: Font) -> void:
 		_draw_text(
 			font,
 			Vector2(panel.position.x + 11.0 * s, text_y),
-			INPUT_HINTS[index],
+			_localized(str(INPUT_HINTS[index][0]), str(INPUT_HINTS[index][1])),
 			font_size,
 			COLOR_TEXT if index == 0 else _with_alpha(COLOR_TEXT, 0.86),
 			panel.size.x - 18.0 * s
@@ -588,7 +595,7 @@ func _draw_minimap(font: Font) -> void:
 	_draw_text(
 		font,
 		panel.position + Vector2(9.0 * s, 7.0 * s),
-		"区域图",
+		_localized("hud.minimap", "区域图"),
 		maxi(9, roundi(10.0 * s)),
 		COLOR_MUTED,
 		panel.size.x - 18.0 * s
@@ -840,6 +847,14 @@ func _state_number(key: String, fallback: float) -> float:
 			return str(value).to_float()
 		_:
 			return fallback
+
+
+func _localized(key: String, fallback: String) -> String:
+	var service := get_node_or_null("/root/I18n")
+	if service == null:
+		return fallback
+	var translated: String = service.translate(key)
+	return fallback if translated == key and not fallback.is_empty() else translated
 
 
 func _as_color(value: Variant, fallback: Color) -> Color:

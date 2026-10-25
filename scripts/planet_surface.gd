@@ -9,21 +9,21 @@ extends Node2D
 const SURFACE_NAME := "Khepri-9 / 烬砂荒原"
 const MIN_WORLD_SIZE := Vector2(7680.0, 5120.0)
 
-const COLOR_SURFACE_BASE := Color("#5b3026")
-const COLOR_SAFE_SAND := Color("#a06f46")
-const COLOR_SAFE_LIGHT := Color("#c39761")
-const COLOR_RUST := Color("#a94f35")
-const COLOR_RUST_LIGHT := Color("#c66d47")
-const COLOR_OCHRE := Color("#a87743")
-const COLOR_OCHRE_LIGHT := Color("#cc9b5f")
-const COLOR_BROWN := Color("#5a3027")
-const COLOR_DEEP := Color("#3b2323")
-const COLOR_DEEP_DUST := Color("#59302a")
-const COLOR_SHADOW := Color("#211417")
-const COLOR_CRACK := Color("#2a1819")
-const COLOR_CRYSTAL := Color("#61d8c7")
-const COLOR_CRYSTAL_DARK := Color("#244c5a")
-const COLOR_MOSS := Color("#76d4a4")
+var COLOR_SURFACE_BASE := Color("#5b3026")
+var COLOR_SAFE_SAND := Color("#a06f46")
+var COLOR_SAFE_LIGHT := Color("#c39761")
+var COLOR_RUST := Color("#a94f35")
+var COLOR_RUST_LIGHT := Color("#c66d47")
+var COLOR_OCHRE := Color("#a87743")
+var COLOR_OCHRE_LIGHT := Color("#cc9b5f")
+var COLOR_BROWN := Color("#5a3027")
+var COLOR_DEEP := Color("#3b2323")
+var COLOR_DEEP_DUST := Color("#59302a")
+var COLOR_SHADOW := Color("#211417")
+var COLOR_CRACK := Color("#2a1819")
+var COLOR_CRYSTAL := Color("#61d8c7")
+var COLOR_CRYSTAL_DARK := Color("#244c5a")
+var COLOR_MOSS := Color("#76d4a4")
 
 const BACKGROUND_Z_INDEX := -20
 const PATCH_COUNT_MIN := 120
@@ -113,6 +113,38 @@ func configure(world_size: Vector2, base_position: Vector2, terrain_seed: int = 
 	queue_redraw()
 
 
+## 应用 PlanetDefinition 的视觉配置；应在 configure() 前调用以影响生成数据。
+func apply_visual_profile(planet: Resource) -> void:
+	if planet == null:
+		return
+	var colors_value: Variant = planet.get("surface_colors")
+	if not (colors_value is Dictionary):
+		return
+	var colors: Dictionary = colors_value
+
+	COLOR_SURFACE_BASE = _color_value(colors, "base", COLOR_SURFACE_BASE)
+	COLOR_SAFE_SAND = _color_value(colors, "safe_sand", COLOR_SAFE_SAND)
+	COLOR_SAFE_LIGHT = _color_value(colors, "safe_light", COLOR_SAFE_LIGHT)
+	COLOR_RUST = _color_value(colors, "rust", COLOR_RUST)
+	COLOR_OCHRE = _color_value(colors, "ochre", COLOR_OCHRE)
+	COLOR_DEEP = _color_value(colors, "deep", COLOR_DEEP)
+	COLOR_SHADOW = _color_value(colors, "shadow", COLOR_SHADOW)
+	COLOR_CRYSTAL = _color_value(colors, "crystal", COLOR_CRYSTAL)
+	COLOR_MOSS = _color_value(colors, "moss", COLOR_MOSS)
+	COLOR_RUST_LIGHT = COLOR_RUST.lightened(0.16)
+	COLOR_OCHRE_LIGHT = COLOR_OCHRE.lightened(0.18)
+	COLOR_BROWN = COLOR_SURFACE_BASE
+	COLOR_DEEP_DUST = COLOR_DEEP.lightened(0.1)
+	COLOR_CRACK = COLOR_SHADOW.darkened(0.08)
+	COLOR_CRYSTAL_DARK = COLOR_CRYSTAL.darkened(0.48)
+	queue_redraw()
+
+
+func _color_value(colors: Dictionary, key: String, fallback: Color) -> Color:
+	var value: Variant = colors.get(key)
+	return value if value is Color else fallback
+
+
 ## 返回世界坐标所属生态带："safe"、"rust" 或 "deep"。
 func get_biome_at(world_position: Vector2) -> String:
 	var distance := world_position.distance_to(base_position)
@@ -128,10 +160,18 @@ func get_biome_at(world_position: Vector2) -> String:
 func get_spawn_clearance(position: Vector2, radius: float) -> bool:
 	if not _configured or radius < 0.0:
 		return false
+	return not bool(get_terrain_sample(position, radius)["blocked"])
 
+
+## 供通用 TerrainQuery 采样：返回生态带、阻挡标签和是否可通行。
+func get_terrain_sample(position: Vector2, radius: float = 0.0) -> Dictionary:
+	var tags := PackedStringArray([get_biome_at(position)])
+	if not _configured or radius < 0.0:
+		return {"tags": tags, "blocked": true}
 	var inset := world_rect.grow(-radius)
 	if not inset.has_point(position):
-		return false
+		tags.append("world_edge")
+		return {"tags": tags, "blocked": true}
 
 	for rock: Dictionary in _rocks:
 		var obstacle_radius := float(rock["collision_radius"])
@@ -143,13 +183,15 @@ func get_spawn_clearance(position: Vector2, radius: float) -> bool:
 				_distance_squared_to_segment(position, segment_start, segment_end)
 				<= clearance * clearance
 			):
-				return false
+				tags.append("ridge")
+				return {"tags": tags, "blocked": true}
 		else:
 			var clearance := radius + obstacle_radius
 			if position.distance_squared_to(rock["position"]) <= clearance * clearance:
-				return false
+				tags.append("rock")
+				return {"tags": tags, "blocked": true}
 
-	return true
+	return {"tags": tags, "blocked": false}
 
 
 ## 暴露生成统计，便于主场景调试或批量生成资源前检查。

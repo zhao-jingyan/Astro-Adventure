@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="RelicDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/relic_definition.gd" id="1_relic"]
+
+[resource]
+script = ExtResource("1_relic")
+id = &"phase_boots"
+display_name_key = "relic.phase_boots.name"
+description_key = "relic.phase_boots.description"
+display_name_fallback = "相位靴"
+description_fallback = "移动速度提高 8%，便于穿过危险地形。"
+rarity = &"uncommon"
+modifiers = {
+"move_speed_multiplier": 1.08
+}

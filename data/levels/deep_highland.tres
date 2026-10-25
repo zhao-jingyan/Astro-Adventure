@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="LevelDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/level_definition.gd" id="1_level"]
+
+[resource]
+script = ExtResource("1_level")
+id = &"deep_highland"
+display_name_key = "level.deep_highland.name"
+description_key = "level.deep_highland.description"
+display_name_fallback = "深核高原"
+description_fallback = "远航终点。高浓度燃油和高威胁怪物同时出现。"
+planet_id = &"khepri_9"
+map_position = Vector2(2.35, 0.45)
+danger = 3
+initial_prep_seconds = 24.0
+later_prep_seconds = 38.0
+total_waves = 5
+terrain_seed = 733
+enemy_spawn_table = Array[Dictionary]([{
+"enemy_id": &"scout",
+"weight": 4.0,
+"min_wave": 1,
+"max_wave": 5
+}, {
+"enemy_id": &"spitter",
+"weight": 4.0,
+"min_wave": 1,
+"max_wave": 5
+}, {
+"enemy_id": &"bruiser",
+"weight": 3.0,
+"min_wave": 1,
+"max_wave": 5
+}])
+wave_enemy_counts = Array[int]([3, 12, 16, 20, 24])

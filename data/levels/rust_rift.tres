@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="LevelDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/level_definition.gd" id="1_level"]
+
+[resource]
+script = ExtResource("1_level")
+id = &"rust_rift"
+display_name_key = "level.rust_rift.name"
+description_key = "level.rust_rift.description"
+display_name_fallback = "铁锈裂谷"
+description_fallback = "撕裂地表下埋有较高产燃油，掠食体活动频繁。"
+planet_id = &"khepri_9"
+map_position = Vector2(1, 0.15)
+danger = 2
+initial_prep_seconds = 24.0
+later_prep_seconds = 38.0
+total_waves = 5
+terrain_seed = 271
+enemy_spawn_table = Array[Dictionary]([{
+"enemy_id": &"scout",
+"weight": 6.0,
+"min_wave": 1,
+"max_wave": 5
+}, {
+"enemy_id": &"spitter",
+"weight": 3.0,
+"min_wave": 1,
+"max_wave": 5
+}, {
+"enemy_id": &"bruiser",
+"weight": 1.5,
+"min_wave": 2,
+"max_wave": 5
+}])
+wave_enemy_counts = Array[int]([3, 11, 14, 17, 20])

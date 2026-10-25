@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="EnemySpeciesDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/enemy_species_definition.gd" id="1_enemy"]
+
+[resource]
+script = ExtResource("1_enemy")
+id = &"scout"
+display_name_key = "enemy.scout.name"
+display_name_fallback = "侦察体"
+visual_kind = 0
+behavior_id = &"aggressive"
+traits = PackedStringArray("fast", "swarm")
+max_health = 42.0
+move_speed = 76.0
+radius = 12.0
+reward = 6
+attack_damage = 9.0
+attack_interval = 1.35
+attack_range = 0.0
+projectile_speed = 0.0
+projectile_color = Color(0.435294, 0.968627, 1, 1)
+body_color = Color(0.207843, 0.85098, 1, 1)
+aggro_radius = 430.0
+leash_radius = 1050.0

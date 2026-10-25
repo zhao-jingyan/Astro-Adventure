@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="LevelDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/level_definition.gd" id="1_level"]
+
+[resource]
+script = ExtResource("1_level")
+id = &"red_basin"
+display_name_key = "level.red_basin.name"
+description_key = "level.red_basin.description"
+display_name_fallback = "赤砂盆地"
+description_fallback = "着陆区附近分布着低产燃油罐，适合补充基础航程。"
+planet_id = &"khepri_9"
+map_position = Vector2(0, 0)
+danger = 1
+initial_prep_seconds = 24.0
+later_prep_seconds = 38.0
+total_waves = 5
+terrain_seed = 137
+enemy_spawn_table = Array[Dictionary]([{
+"enemy_id": &"scout",
+"weight": 10.0,
+"min_wave": 1,
+"max_wave": 5
+}, {
+"enemy_id": &"spitter",
+"weight": 1.0,
+"min_wave": 2,
+"max_wave": 5
+}, {
+"enemy_id": &"bruiser",
+"weight": 0.5,
+"min_wave": 3,
+"max_wave": 5
+}])
+wave_enemy_counts = Array[int]([3, 11, 14, 17, 20])

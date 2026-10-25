@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="PlanetDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/planet_definition.gd" id="1_planet"]
+
+[resource]
+script = ExtResource("1_planet")
+id = &"khepri_9"
+display_name_key = "planet.khepri_9.name"
+description_key = "planet.khepri_9.description"
+display_name_fallback = "Khepri-9"
+description_fallback = "一颗被赤砂、锈蚀岩层和晶体风暴反复雕刻的边境行星。"
+terrain_seed = 137
+surface_colors = {
+"base": Color(0.356863, 0.188235, 0.14902, 1),
+"safe_sand": Color(0.627451, 0.435294, 0.27451, 1),
+"safe_light": Color(0.764706, 0.592157, 0.380392, 1),
+"rust": Color(0.662745, 0.309804, 0.207843, 1),
+"ochre": Color(0.658824, 0.466667, 0.262745, 1),
+"deep": Color(0.231373, 0.137255, 0.137255, 1),
+"shadow": Color(0.129412, 0.0784314, 0.0901961, 1),
+"crystal": Color(0.380392, 0.847059, 0.780392, 1),
+"moss": Color(0.462745, 0.831373, 0.643137, 1)
+}
+music_track_id = &"main"

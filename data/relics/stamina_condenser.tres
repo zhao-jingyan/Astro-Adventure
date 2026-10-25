@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="RelicDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/relic_definition.gd" id="1_relic"]
+
+[resource]
+script = ExtResource("1_relic")
+id = &"stamina_condenser"
+display_name_key = "relic.stamina_condenser.name"
+description_key = "relic.stamina_condenser.description"
+display_name_fallback = "体力冷凝器"
+description_fallback = "体力恢复速度提高 20%。"
+rarity = &"common"
+modifiers = {
+"stamina_recovery_multiplier": 1.2
+}
